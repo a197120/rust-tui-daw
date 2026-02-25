@@ -99,17 +99,25 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                             KeyCode::Char('=') if app.mode == AppMode::Drums => app.drum_vol_up(),
                             KeyCode::Char('-') if app.mode == AppMode::Drums => app.drum_vol_down(),
 
-                            // SynthSeq2 focus: cursor + BPM
+                            // SynthSeq2 focus: cursor + BPM + volume + octave
                             KeyCode::Left  if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_left(),
                             KeyCode::Right if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_right(),
                             KeyCode::Up    if app.mode == AppMode::SynthSeq2 => app.bpm_up(),
                             KeyCode::Down  if app.mode == AppMode::SynthSeq2 => app.bpm_down(),
+                            KeyCode::Char('=') if app.mode == AppMode::SynthSeq2 => app.synth2_vol_up(),
+                            KeyCode::Char('-') if app.mode == AppMode::SynthSeq2 => app.synth2_vol_down(),
+                            KeyCode::Char('[') if app.mode == AppMode::SynthSeq2 => app.octave_down(),
+                            KeyCode::Char('{') if app.mode == AppMode::SynthSeq2 => app.octave_up(),
 
-                            // SynthSeq focus: cursor + BPM
+                            // SynthSeq focus: cursor + BPM + volume + octave
                             KeyCode::Left  if app.mode == AppMode::SynthSeq => app.seq_cursor_left(),
                             KeyCode::Right if app.mode == AppMode::SynthSeq => app.seq_cursor_right(),
                             KeyCode::Up    if app.mode == AppMode::SynthSeq => app.bpm_up(),
                             KeyCode::Down  if app.mode == AppMode::SynthSeq => app.bpm_down(),
+                            KeyCode::Char('=') if app.mode == AppMode::SynthSeq => app.volume_up(),
+                            KeyCode::Char('-') if app.mode == AppMode::SynthSeq => app.volume_down(),
+                            KeyCode::Char('[') if app.mode == AppMode::SynthSeq => app.octave_down(),
+                            KeyCode::Char('{') if app.mode == AppMode::SynthSeq => app.octave_up(),
 
                             // Keyboard focus: octave + volume
                             KeyCode::Left  => app.octave_down(),
@@ -171,6 +179,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Backspace | KeyCode::Delete if app.mode == AppMode::SynthSeq2 => app.seq2_clear_step(),
                         KeyCode::Char(']') if app.mode == AppMode::SynthSeq2 => app.seq2_cycle_steps(),
                         KeyCode::F(5)      if app.mode == AppMode::SynthSeq2 => app.cycle_wave2(),
+                        KeyCode::Char('=') if app.mode == AppMode::SynthSeq2 => app.synth2_vol_up(),
+                        KeyCode::Char('-') if app.mode == AppMode::SynthSeq2 => app.synth2_vol_down(),
+                        KeyCode::Char('[') if app.mode == AppMode::SynthSeq2 => app.octave_down(),
+                        KeyCode::Char('{') if app.mode == AppMode::SynthSeq2 => app.octave_up(),
 
                         // ── SynthSeq focus ────────────────────────────────
                         KeyCode::Left  if app.mode == AppMode::SynthSeq => app.seq_cursor_left(),
@@ -180,6 +192,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Char(' ') if app.mode == AppMode::SynthSeq => app.seq_toggle_play(),
                         KeyCode::Backspace | KeyCode::Delete if app.mode == AppMode::SynthSeq => app.seq_clear_step(),
                         KeyCode::Char(']') if app.mode == AppMode::SynthSeq => app.seq_cycle_steps(),
+                        KeyCode::Char('=') if app.mode == AppMode::SynthSeq => app.volume_up(),
+                        KeyCode::Char('-') if app.mode == AppMode::SynthSeq => app.volume_down(),
+                        KeyCode::Char('[') if app.mode == AppMode::SynthSeq => app.octave_down(),
+                        KeyCode::Char('{') if app.mode == AppMode::SynthSeq => app.octave_up(),
 
                         // ── Keyboard focus ────────────────────────────────
                         KeyCode::Left  => app.octave_down(),

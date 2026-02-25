@@ -247,15 +247,15 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
 fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
     let focused = app.mode == AppMode::SynthSeq;
     let title = if focused {
-        " ► Synth Seq — [←→] Cursor  [↑↓] BPM  [Space] Play  [Del] Clear  []] Steps "
+        " ► Synth Seq — [←→] Cursor  [↑↓] BPM  [Space] Play  [Del] Clear  []] Steps  [-=] Vol  [[{] Oct "
     } else {
         " Synth Seq "
     };
 
-    let (bpm, num_steps, current_step, playing, steps) = {
+    let (bpm, num_steps, current_step, playing, steps, volume) = {
         let s = app.synth.lock().unwrap();
         (s.bpm, s.sequencer.num_steps, s.sequencer.current_step,
-         s.sequencer.playing, s.sequencer.steps.clone())
+         s.sequencer.playing, s.sequencer.steps.clone(), s.volume)
     };
     let cursor = app.seq_cursor;
     let mut lines: Vec<Line> = Vec::new();
@@ -270,6 +270,9 @@ fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(format!("{}", num_steps), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(status_str, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled("Vol: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{:.0}%", volume * 100.0), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(format!("Oct:{}", app.base_octave), Style::default().fg(Color::DarkGray)),
     ]));
@@ -336,16 +339,16 @@ fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
 fn draw_synth_seq2(f: &mut Frame, area: Rect, app: &App) {
     let focused = app.mode == AppMode::SynthSeq2;
     let title = if focused {
-        " ► Synth Seq 2 — [←→] Cursor  [↑↓] BPM  [Space] Play  [Del] Clear  []] Steps  [F5] Wave "
+        " ► Synth Seq 2 — [←→] Cursor  [↑↓] BPM  [Space] Play  [Del] Clear  []] Steps  [F5] Wave  [-=] Vol  [[{] Oct "
     } else {
         " Synth Seq 2 "
     };
 
-    let (bpm, num_steps, current_step, playing, steps, wave_name) = {
+    let (bpm, num_steps, current_step, playing, steps, wave_name, volume2) = {
         let s = app.synth.lock().unwrap();
         (s.bpm, s.sequencer2.num_steps, s.sequencer2.current_step,
          s.sequencer2.playing, s.sequencer2.steps.clone(),
-         s.wave_type2.name().to_string())
+         s.wave_type2.name().to_string(), s.volume2)
     };
     let cursor = app.seq2_cursor;
     let mut lines: Vec<Line> = Vec::new();
@@ -363,6 +366,11 @@ fn draw_synth_seq2(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
         Span::styled("Wave: ", Style::default().fg(Color::DarkGray)),
         Span::styled(wave_name, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled("Vol: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{:.0}%", volume2 * 100.0), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled(format!("Oct:{}", app.base_octave), Style::default().fg(Color::DarkGray)),
     ]));
 
     let per_row = if num_steps <= 8 { 8 } else { 16 };
@@ -753,7 +761,9 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
             Span::raw("set note at cursor (advances)  │  "),
             Span::styled("[Space] ", w), Span::raw("Play/Pause  │  "),
             Span::styled("[Del] ",   w), Span::raw("Clear  │  "),
-            Span::styled("[]] ",     w), Span::raw("Cycle steps"),
+            Span::styled("[]] ",     w), Span::raw("Cycle steps  │  "),
+            Span::styled("[-=] ",    w), Span::raw("Vol  │  "),
+            Span::styled("[[{] ",    w), Span::raw("Oct down/up"),
         ]),
         AppMode::SynthSeq2 => Line::from(vec![
             Span::styled("Piano keys: ", d),
@@ -761,7 +771,9 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("[Space] ", w), Span::raw("Play/Pause  │  "),
             Span::styled("[Del] ",   w), Span::raw("Clear  │  "),
             Span::styled("[]] ",     w), Span::raw("Cycle steps  │  "),
-            Span::styled("[F5] ",    w), Span::raw("Wave"),
+            Span::styled("[F5] ",    w), Span::raw("Wave  │  "),
+            Span::styled("[-=] ",    w), Span::raw("Vol  │  "),
+            Span::styled("[[{] ",    w), Span::raw("Oct down/up"),
         ]),
         AppMode::Drums => Line::from(vec![
             Span::styled("Preview: ", d),

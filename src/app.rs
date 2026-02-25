@@ -172,13 +172,25 @@ impl App {
     pub fn volume_up(&mut self) {
         let mut s = self.synth.lock().unwrap();
         s.volume = (s.volume + 0.05).min(1.0);
-        self.status_msg = format!("Volume: {:.0}%", s.volume * 100.0);
+        self.status_msg = format!("Vol: {:.0}%", s.volume * 100.0);
     }
 
     pub fn volume_down(&mut self) {
         let mut s = self.synth.lock().unwrap();
         s.volume = (s.volume - 0.05).max(0.0);
-        self.status_msg = format!("Volume: {:.0}%", s.volume * 100.0);
+        self.status_msg = format!("Vol: {:.0}%", s.volume * 100.0);
+    }
+
+    pub fn synth2_vol_up(&mut self) {
+        let mut s = self.synth.lock().unwrap();
+        s.volume2 = (s.volume2 + 0.05).min(1.0);
+        self.status_msg = format!("Synth2 Vol: {:.0}%", s.volume2 * 100.0);
+    }
+
+    pub fn synth2_vol_down(&mut self) {
+        let mut s = self.synth.lock().unwrap();
+        s.volume2 = (s.volume2 - 0.05).max(0.0);
+        self.status_msg = format!("Synth2 Vol: {:.0}%", s.volume2 * 100.0);
     }
 
     /// Shared master BPM — affects both the melodic and drum sequencers.
