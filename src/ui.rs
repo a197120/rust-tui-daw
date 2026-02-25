@@ -483,18 +483,19 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
         " Drum Machine "
     };
 
-    let (bpm, num_steps, current_step, playing, tracks) = {
+    let (bpm, num_steps, current_step, playing, swing, tracks) = {
         let s = app.synth.lock().unwrap();
         let dm = &s.drum_machine;
         let tracks: Vec<(DrumKind, Vec<u8>, bool, f32)> =
             dm.tracks.iter().map(|t| (t.kind, t.steps.clone(), t.muted, t.volume)).collect();
-        (s.bpm, dm.num_steps, dm.current_step, dm.playing, tracks)
+        (s.bpm, dm.num_steps, dm.current_step, dm.playing, dm.swing, tracks)
     };
     let sel_track = app.drum_track;
     let sel_step  = app.drum_step;
 
     let mut lines: Vec<Line> = Vec::new();
 
+    let swing_pct = (swing * 100.0).round() as u32;
     let (status_str, status_color) =
         if playing { ("▶ PLAYING", Color::Green) } else { ("■ STOPPED", Color::DarkGray) };
     lines.push(Line::from(vec![
@@ -505,6 +506,16 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(format!("{}", num_steps), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(status_str, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled("Swing: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{}%", swing_pct),
+            if swing_pct > 0 {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ),
     ]));
 
     {
