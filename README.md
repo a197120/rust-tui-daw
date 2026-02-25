@@ -1,6 +1,6 @@
-# TuiBeat (TUI synth & drum machine)
+# Tui-Beat (TUI synth & drum machine)
 
-A small terminal synthesizer and drum machine written in Rust. This is a pet project that was developed with a lot of automated/AI-assisted code generation and iteration — consider it experimental. If you find bugs or have feature requests, please open an issue on GitHub (https://github.com/a197120/tui-beat) — contributions and ideas are very welcome.
+A small terminal synthesizer and drum machine written in Rust. This is a pet project that was developed with a lot of automated/AI-assisted code generation and iteration — consider it experimental. If you find bugs or have feature requests, please open an issue on GitHub (https://github.com/a197120/Tui-Beat) — contributions and ideas are very welcome.
 
 ## What this is
 - A terminal-based DAW / synth + drum machine that runs in the terminal (TUI).
@@ -48,7 +48,7 @@ This is a personal pet project and many parts were created with AI assistance. I
 - Want a feature — open an issue labeled `feature-request` or start a discussion.
 - Want to contribute code — open a PR and describe the change; small, focused PRs are easiest to review.
 
-You can reach out via GitHub issues: https://github.com/a197120/tui-beat/issues
+You can reach out via GitHub issues: https://github.com/a197120/Tui-Beat/issues
 
 ## License
 No explicit license is included in the repo yet. If you'd like a license added (MIT / Apache-2.0 / etc.), open an issue or submit a PR.
