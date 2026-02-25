@@ -1,1 +1,46 @@
-/target
+# .gitignore — Rust project
+
+# Ignore build artifacts
+/target/
+
+# Ignore Cargo lock files (optional for libraries — keep for reproducible builds if desired)
+**/Cargo.lock
+
+# Generated files from build tools
+**/*.rmeta
+**/*.rlib
+
+# Binaries
+**/*.exe
+**/*.dll
+**/*.so
+**/*.dylib
+
+# Editor / IDE files
+/.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Rust toolchain / tooling
+/.rustup/
+.rustfmt.toml
+
+# Coverage / profiler
+coverage/
+*.prof
+
+# Ignore user-specific or ephemeral Claude files
+# (any files or directories with the .claude extension/name)
+*.claude
+.claude
+.claude/**
