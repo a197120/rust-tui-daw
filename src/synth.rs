@@ -112,6 +112,24 @@ impl FxRouting {
     }
 }
 
+// ── Sidechain compressor ──────────────────────────────────────────────────────
+
+pub struct Sidechain {
+    pub enabled:    bool,
+    pub depth:      f32,    // 0.0–1.0
+    pub release_ms: f32,    // 10.0–500.0
+    pub duck_s1:    bool,
+    pub duck_s2:    bool,
+    pub envelope:   f32,    // per-sample state (0.0–1.0)
+}
+
+impl Sidechain {
+    pub fn new() -> Self {
+        Self { enabled: false, depth: 0.8, release_ms: 150.0,
+               duck_s1: true, duck_s2: true, envelope: 0.0 }
+    }
+}
+
 // ── Synth ─────────────────────────────────────────────────────────────────────
 
 pub struct Synth {
@@ -153,6 +171,13 @@ pub struct Synth {
 
     // ── Per-instrument send routing ───────────────────────────────────────
     pub fx_routing: FxRouting,
+
+    // ── Sidechain compressor ──────────────────────────────────────────────
+    pub sidechain: Sidechain,
+
+    // ── Oscilloscope ring buffer ──────────────────────────────────────────
+    pub scope_buf: Vec<f32>,
+    pub scope_pos: usize,
 }
 
 impl Synth {
@@ -183,6 +208,10 @@ impl Synth {
             distortion:  Distortion::new(),
 
             fx_routing:  FxRouting::new(),
+
+            sidechain:  Sidechain::new(),
+            scope_buf:  vec![0.0f32; 512],
+            scope_pos:  0,
         }
     }
 
@@ -254,6 +283,16 @@ impl Synth {
         // ── Drum bus ──────────────────────────────────────────────────────
         let drum_out = self.drum_machine.generate_sample(self.bpm, clock) * self.volume;
 
+        // ── Sidechain ─────────────────────────────────────────────────────
+        let kick = self.drum_machine.kick_triggered;
+        self.drum_machine.kick_triggered = false;
+        if kick { self.sidechain.envelope = 1.0; }
+        let rel_c = (-1.0_f32 / (self.sidechain.release_ms * 0.001 * self.sample_rate)).exp();
+        self.sidechain.envelope = (self.sidechain.envelope * rel_c).clamp(0.0, 1.0);
+        let sc_gain = 1.0 - self.sidechain.envelope * self.sidechain.depth;
+        let mel1_out = if self.sidechain.enabled && self.sidechain.duck_s1 { mel1_out * sc_gain } else { mel1_out };
+        let mel2_out = if self.sidechain.enabled && self.sidechain.duck_s2 { mel2_out * sc_gain } else { mel2_out };
+
         // ── Master mix (always dry) ───────────────────────────────────────
         let dry = (mel1_out + mel2_out + drum_out).tanh();
 
@@ -275,7 +314,10 @@ impl Synth {
         let dst_wet = self.distortion.process(
             (s1_dst * mel1_out + s2_dst * mel2_out + dr_dst * drum_out).tanh());
 
-        (dry + rev_wet + dly_wet + dst_wet).tanh()
+        let out = (dry + rev_wet + dly_wet + dst_wet).tanh();
+        self.scope_buf[self.scope_pos % 512] = out;
+        self.scope_pos = self.scope_pos.wrapping_add(1);
+        out
     }
 }
 

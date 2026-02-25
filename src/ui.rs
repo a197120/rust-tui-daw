@@ -20,14 +20,15 @@ pub fn draw(f: &mut Frame, app: &App, enhanced: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // title bar
-            Constraint::Length(12), // piano keyboard
-            Constraint::Length(8),  // melodic step sequencer 1
-            Constraint::Length(8),  // melodic step sequencer 2
-            Constraint::Length(12), // drum machine
-            Constraint::Length(5),  // effects
-            Constraint::Length(4),  // status
-            Constraint::Min(0),     // help
+            Constraint::Length(3),  // title bar      chunks[0]
+            Constraint::Length(12), // piano keyboard  chunks[1]
+            Constraint::Length(8),  // synth seq 1     chunks[2]
+            Constraint::Length(8),  // synth seq 2     chunks[3]
+            Constraint::Length(12), // drum machine    chunks[4]
+            Constraint::Length(6),  // effects         chunks[5]
+            Constraint::Length(4),  // status          chunks[6]
+            Constraint::Length(6),  // scope           chunks[7]
+            Constraint::Min(0),     // help            chunks[8]
         ])
         .split(area);
 
@@ -38,7 +39,8 @@ pub fn draw(f: &mut Frame, app: &App, enhanced: bool) {
     draw_drums(f, chunks[4], app);
     draw_effects(f, chunks[5], app);
     draw_status(f, chunks[6], app);
-    draw_help(f, chunks[7], app);
+    draw_oscilloscope(f, chunks[7], app);
+    draw_help(f, chunks[8], app);
 }
 
 // ── Title bar ─────────────────────────────────────────────────────────────────
@@ -90,15 +92,16 @@ fn draw_piano(f: &mut Frame, area: Rect, app: &App) {
         });
     let inner = block.inner(area);
     f.render_widget(block, area);
-    render_piano_widget(f, inner, &app.highlighted_notes());
+    render_piano_widget(f, inner, app.base_octave, &app.highlighted_notes());
 }
 
-fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
+fn render_piano_widget(f: &mut Frame, area: Rect, base_octave: i32, active: &HashSet<u8>) {
     let white_sem = [0u8, 2, 4, 5, 7, 9, 11];
     let has_black = [true, true, false, true, true, true, false];
     let black_sem = [1u8, 3, 0, 6, 8, 10, 0];
     let num_oct   = 2usize;
     let n_white   = white_sem.len() * num_oct + 1;
+    let base_midi = (base_octave * 12 + 12) as u8;
 
     let lower_white = ["z","x","c","v","b","n","m"];
     let upper_white = ["q","w","e","r","t","y","u"];
@@ -121,15 +124,22 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
         let mut s = vec![Span::raw("│")];
         for wi in 0..n_white {
             let oct = wi / 7; let local_wi = wi % 7;
-            let ws = if wi == n_white-1 { 0u8 } else { white_sem[local_wi] };
             let hb = wi < n_white-1 && has_black[local_wi];
-            let bs = if hb { black_sem[local_wi] } else { 0 };
-            let w_active = active.contains(&ws);
+
+            let midi_w = if wi == n_white - 1 {
+                base_midi + 24
+            } else {
+                base_midi + (oct as u8) * 12 + white_sem[local_wi]
+            };
+            let w_active = active.contains(&midi_w);
 
             let left_black = if local_wi > 0 { has_black[local_wi-1] } else { oct > 0 && has_black[6] };
-            let lb_sem     = if local_wi > 0 && has_black[local_wi-1] { black_sem[local_wi-1] } else { 0 };
-            let lb_active  = left_black && active.contains(&lb_sem);
-            let rb_active  = hb && active.contains(&bs);
+            let midi_lb = if local_wi > 0 && has_black[local_wi-1] {
+                base_midi + (oct as u8) * 12 + black_sem[local_wi - 1]
+            } else { 0 };
+            let lb_active  = left_black && active.contains(&midi_lb);
+            let midi_rb = if hb { base_midi + (oct as u8) * 12 + black_sem[local_wi] } else { 0 };
+            let rb_active  = hb && active.contains(&midi_rb);
 
             let ws_style = if w_active { Style::default().bg(Color::Yellow).fg(Color::Black) }
                            else        { Style::default().bg(Color::White).fg(Color::Black) };
@@ -154,11 +164,16 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
         let mut s = vec![Span::raw("│")];
         for wi in 0..n_white {
             let oct = wi / 7; let local_wi = wi % 7;
-            let ws = if wi == n_white-1 { 0u8 } else { white_sem[local_wi] };
             let hb = wi < n_white-1 && has_black[local_wi];
-            let bs = if hb { black_sem[local_wi] } else { 0 };
-            let w_active  = active.contains(&ws);
-            let rb_active = hb && active.contains(&bs);
+
+            let midi_w = if wi == n_white - 1 {
+                base_midi + 24
+            } else {
+                base_midi + (oct as u8) * 12 + white_sem[local_wi]
+            };
+            let w_active  = active.contains(&midi_w);
+            let midi_rb = if hb { base_midi + (oct as u8) * 12 + black_sem[local_wi] } else { 0 };
+            let rb_active = hb && active.contains(&midi_rb);
 
             let ll = if local_wi > 0 && has_black[local_wi-1] {
                 if oct == 0 { lower_black[local_wi-1] } else { upper_black[local_wi-1] }
@@ -171,7 +186,8 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
             let bk_sty   = Style::default().bg(Color::Black).fg(Color::DarkGray);
 
             let lhb = local_wi > 0 && has_black[local_wi-1];
-            let la  = lhb && active.contains(&black_sem[local_wi-1]);
+            let midi_la = if lhb { base_midi + (oct as u8) * 12 + black_sem[local_wi - 1] } else { 0 };
+            let la  = lhb && active.contains(&midi_la);
             let lc  = if lhb { Span::styled(ll, if la { bk_a_sty } else { bk_sty }) } else { Span::styled(" ", ws_sty) };
             let mc  = Span::styled(" ", ws_sty);
             let rc  = if hb { Span::styled(rl, if rb_active { bk_a_sty } else { bk_sty }) } else { Span::styled(" ", ws_sty) };
@@ -184,9 +200,14 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
     {
         let mut s = vec![Span::raw("│")];
         for wi in 0..n_white {
+            let oct = wi / 7;
             let local_wi = wi % 7;
-            let ws = if wi == n_white-1 { 0u8 } else { white_sem[local_wi] };
-            let w_active = active.contains(&ws);
+            let midi_w = if wi == n_white - 1 {
+                base_midi + 24
+            } else {
+                base_midi + (oct as u8) * 12 + white_sem[local_wi]
+            };
+            let w_active = active.contains(&midi_w);
             let sty = if w_active { Style::default().bg(Color::Yellow).fg(Color::Black) }
                       else        { Style::default().bg(Color::White).fg(Color::Black) };
             let hbl = local_wi > 0 && has_black[local_wi-1];
@@ -204,8 +225,12 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
         let mut s = vec![Span::raw("│")];
         for wi in 0..n_white {
             let oct = wi / 7; let local_wi = wi % 7;
-            let ws = if wi == n_white-1 { 0u8 } else { white_sem[local_wi] };
-            let w_active = active.contains(&ws);
+            let midi_w = if wi == n_white - 1 {
+                base_midi + 24
+            } else {
+                base_midi + (oct as u8) * 12 + white_sem[local_wi]
+            };
+            let w_active = active.contains(&midi_w);
             let sty = if w_active { Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD) }
                       else        { Style::default().bg(Color::White).fg(Color::DarkGray) };
             let label = if wi == n_white-1 { "" } else if oct == 0 { lower_white[local_wi] } else { upper_white[local_wi] };
@@ -219,9 +244,14 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
     {
         let mut s = vec![Span::raw("│")];
         for wi in 0..n_white {
+            let oct = wi / 7;
             let local_wi = wi % 7;
-            let ws = if wi == n_white-1 { 0u8 } else { white_sem[local_wi] };
-            let w_active = active.contains(&ws);
+            let midi_w = if wi == n_white - 1 {
+                base_midi + 24
+            } else {
+                base_midi + (oct as u8) * 12 + white_sem[local_wi]
+            };
+            let w_active = active.contains(&midi_w);
             let sty = if w_active { Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD) }
                       else        { Style::default().bg(Color::White).fg(Color::Black) };
             let name = if wi == n_white-1 { "C" } else { note_names[local_wi] };
@@ -247,7 +277,7 @@ fn render_piano_widget(f: &mut Frame, area: Rect, active: &HashSet<u8>) {
 fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
     let focused = app.mode == AppMode::SynthSeq;
     let title = if focused {
-        " ► Synth Seq — [←→] Cursor  [↑↓] BPM  [Space] Play  [Del] Clear  []] Steps  [-=] Vol  [[{] Oct "
+        " ► Synth Seq — [←→] Cursor  [↑↓] BPM  [Enter/Space] Play  [Del] Clear  []] Steps  [-=] Vol  [[{] Oct "
     } else {
         " Synth Seq "
     };
@@ -339,7 +369,7 @@ fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
 fn draw_synth_seq2(f: &mut Frame, area: Rect, app: &App) {
     let focused = app.mode == AppMode::SynthSeq2;
     let title = if focused {
-        " ► Synth Seq 2 — [←→] Cursor  [↑↓] BPM  [Space] Play  [Del] Clear  []] Steps  [F5] Wave  [-=] Vol  [[{] Oct "
+        " ► Synth Seq 2 — [←→] Cursor  [↑↓] BPM  [Enter/Space] Play  [Del] Clear  []] Steps  [F5] Wave  [-=] Vol  [[{] Oct "
     } else {
         " Synth Seq 2 "
     };
@@ -448,7 +478,7 @@ fn drum_color(kind: DrumKind) -> Color {
 fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
     let focused = app.mode == AppMode::Drums;
     let title = if focused {
-        " ► Drum Machine — [↑↓] Track  [←→] Step  [Space] Toggle  [\\] Mute  [-=] Vol  []] Steps "
+        " ► Drum Machine — [↑↓] Track  [←→] Step  [Space] Toggle  [\\] Mute  [-=] Vol  []] Steps  [p/[] Prob  [e] Euclid "
     } else {
         " Drum Machine "
     };
@@ -456,7 +486,7 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
     let (bpm, num_steps, current_step, playing, tracks) = {
         let s = app.synth.lock().unwrap();
         let dm = &s.drum_machine;
-        let tracks: Vec<(DrumKind, Vec<bool>, bool, f32)> =
+        let tracks: Vec<(DrumKind, Vec<u8>, bool, f32)> =
             dm.tracks.iter().map(|t| (t.kind, t.steps.clone(), t.muted, t.volume)).collect();
         (s.bpm, dm.num_steps, dm.current_step, dm.playing, tracks)
     };
@@ -521,11 +551,18 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
         ];
 
         for i in 0..num_steps {
-            let active  = steps.get(i).copied().unwrap_or(false);
+            let prob    = steps.get(i).copied().unwrap_or(0);
+            let active  = prob > 0;
             let is_ph   = playing && i == current_step;
             let is_cu   = is_selected && i == sel_step;
 
-            let cell_char = if active { "█" } else { "·" };
+            let cell_char = match prob {
+                0       => "·",
+                1..=33  => "░",
+                34..=66 => "▒",
+                67..=99 => "▓",
+                _       => "█",
+            };
 
             let sty = if is_ph && is_cu {
                 Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
@@ -579,7 +616,7 @@ fn pbar4(v: f32) -> String {
 fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
     let focused = app.mode == AppMode::Effects;
     let title = if focused {
-        " ► Effects — [↑↓] Select  [←→] Param  [-=] Adjust  [Space] On/Off or Route "
+        " ► Effects — [↑↓] Select  [←→] Param  [-=] Adjust  [Enter] On/Off  [Space] Route 0↔100% "
     } else {
         " Effects "
     };
@@ -590,14 +627,17 @@ fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
          dst_en, dst_drv, dst_tone, dst_lvl,
          s1_rev, s2_rev, dr_rev,
          s1_dly, s2_dly, dr_dly,
-         s1_dst, s2_dst, dr_dst) = {
+         s1_dst, s2_dst, dr_dst,
+         sc_en, sc_depth, sc_rel, sc_s1, sc_s2) = {
         let s = app.synth.lock().unwrap();
         (s.reverb.enabled, s.reverb.room_size, s.reverb.damping, s.reverb.mix,
          s.delay.enabled,  s.delay.time_ms,    s.delay.feedback,  s.delay.mix,
          s.distortion.enabled, s.distortion.drive, s.distortion.tone, s.distortion.level,
          s.fx_routing.s1_reverb, s.fx_routing.s2_reverb, s.fx_routing.dr_reverb,
          s.fx_routing.s1_delay,  s.fx_routing.s2_delay,  s.fx_routing.dr_delay,
-         s.fx_routing.s1_dist,   s.fx_routing.s2_dist,   s.fx_routing.dr_dist)
+         s.fx_routing.s1_dist,   s.fx_routing.s2_dist,   s.fx_routing.dr_dist,
+         s.sidechain.enabled, s.sidechain.depth, s.sidechain.release_ms,
+         s.sidechain.duck_s1, s.sidechain.duck_s2)
     };
 
     let sel = app.effects_sel;
@@ -674,17 +714,23 @@ fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
     let dst_d = [format!("{:.1}x",  dst_drv),
                  format!("{:.0}%",  dst_tone * 100.0),
                  format!("{:.0}%",  dst_lvl  * 100.0)];
+    let sc_d  = [format!("{:.0}%",  sc_depth * 100.0),
+                 format!("{:.0}ms", sc_rel),
+                 "---".to_string()];
 
     let lines = vec![
-        make_row(0, rev_en, Color::Blue,  "REVERB ", &["Room","Damp","Mix "],
+        make_row(0, rev_en, Color::Blue,    "REVERB ", &["Room","Damp","Mix "],
                  &[rev_room, rev_damp, rev_mix], &[1.0, 1.0, 1.0], &rev_d,
                  &[s1_rev, s2_rev, dr_rev]),
-        make_row(1, dly_en, Color::Green, "DELAY  ", &["Time","Feed","Mix "],
+        make_row(1, dly_en, Color::Green,   "DELAY  ", &["Time","Feed","Mix "],
                  &[dly_time, dly_feed, dly_mix], &[1000.0, 0.95, 1.0], &dly_d,
                  &[s1_dly, s2_dly, dr_dly]),
-        make_row(2, dst_en, Color::Red,   "DISTORT", &["Drv ","Tone","Lvl "],
+        make_row(2, dst_en, Color::Red,     "DISTORT", &["Drv ","Tone","Lvl "],
                  &[dst_drv,  dst_tone, dst_lvl],  &[10.0,  1.0,  1.0], &dst_d,
                  &[s1_dst, s2_dst, dr_dst]),
+        make_row(3, sc_en,  Color::Magenta, "SIDECHN", &["Dpth","Rel ","--- "],
+                 &[sc_depth, sc_rel, 0.0], &[1.0, 500.0, 1.0], &sc_d,
+                 &[sc_s1 as u8 as f32, sc_s2 as u8 as f32, 0.0]),
     ];
 
     f.render_widget(
@@ -737,6 +783,56 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+// ── Oscilloscope ──────────────────────────────────────────────────────────────
+
+fn braille_bit(col: usize, row: usize) -> u8 {
+    match (col, row) {
+        (0, 0) => 0x01, (0, 1) => 0x02, (0, 2) => 0x04, (0, 3) => 0x40,
+        (1, 0) => 0x08, (1, 1) => 0x10, (1, 2) => 0x20, (1, 3) => 0x80,
+        _ => 0,
+    }
+}
+
+fn draw_oscilloscope(f: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default().title(" Scope ").borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (buf, pos) = {
+        let s = app.synth.lock().unwrap();
+        (s.scope_buf.clone(), s.scope_pos)
+    };
+    let w = inner.width as usize;
+    let h = inner.height as usize;
+    if w == 0 || h == 0 { return; }
+
+    let n = (w * 2).min(buf.len());
+    let start = pos.wrapping_sub(n) % buf.len();
+    let samples: Vec<f32> = (0..n).map(|i| buf[(start + i) % buf.len()]).collect();
+
+    let mut lines = Vec::with_capacity(h);
+    for row in 0..h {
+        let mut spans = Vec::with_capacity(w);
+        for col in 0..w {
+            let mut bits = 0u8;
+            for dc in 0..2usize {
+                let si = col * 2 + dc;
+                if si >= samples.len() { continue; }
+                let sv = samples[si].clamp(-1.0, 1.0);
+                let y = ((1.0 - sv) * 0.5 * (h * 4) as f32) as usize;
+                let y = y.min(h * 4 - 1);
+                if y / 4 == row { bits |= braille_bit(dc, y % 4); }
+            }
+            let ch = char::from_u32(0x2800 + bits as u32).unwrap_or(' ');
+            let color = if bits != 0 { Color::Cyan } else { Color::DarkGray };
+            spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+        }
+        lines.push(Line::from(spans));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 // ── Unified help panel ────────────────────────────────────────────────────────
 
 fn draw_help(f: &mut Frame, area: Rect, app: &App) {
@@ -759,7 +855,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         AppMode::SynthSeq => Line::from(vec![
             Span::styled("Piano keys: ", d),
             Span::raw("set note at cursor (advances)  │  "),
-            Span::styled("[Space] ", w), Span::raw("Play/Pause  │  "),
+            Span::styled("[Enter/Space] ", w), Span::raw("Play/Pause  │  "),
             Span::styled("[Del] ",   w), Span::raw("Clear  │  "),
             Span::styled("[]] ",     w), Span::raw("Cycle steps  │  "),
             Span::styled("[-=] ",    w), Span::raw("Vol  │  "),
@@ -768,7 +864,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         AppMode::SynthSeq2 => Line::from(vec![
             Span::styled("Piano keys: ", d),
             Span::raw("set note at cursor (advances)  │  "),
-            Span::styled("[Space] ", w), Span::raw("Play/Pause  │  "),
+            Span::styled("[Enter/Space] ", w), Span::raw("Play/Pause  │  "),
             Span::styled("[Del] ",   w), Span::raw("Clear  │  "),
             Span::styled("[]] ",     w), Span::raw("Cycle steps  │  "),
             Span::styled("[F5] ",    w), Span::raw("Wave  │  "),
@@ -787,14 +883,16 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
             Span::styled(",",  Style::default().fg(Color::LightCyan)),  Span::raw(" H.Tom  │  "),
             Span::styled("[Enter] ", w), Span::raw("Play  │  "),
             Span::styled("[\\ ] ", w),  Span::raw("Mute  │  "),
-            Span::styled("[Del] ",  w), Span::raw("Clear"),
+            Span::styled("[Del] ",  w), Span::raw("Clear  │  "),
+            Span::styled("[p/[] ", w),  Span::raw("Prob +/-25%  │  "),
+            Span::styled("[e] ",    w), Span::raw("Euclidean fill"),
         ]),
         AppMode::Effects => Line::from(vec![
-            Span::styled("[↑↓] ", w), Span::raw("Select effect  │  "),
-            Span::styled("[←→] ", w), Span::raw("Select param (col 1-3) or send (col 4-6)  │  "),
+            Span::styled("[↑↓] ", w), Span::raw("Select effect (row 4=Sidechain)  │  "),
+            Span::styled("[←→] ", w), Span::raw("Param (col 1-3) or send (col 4-6)  │  "),
             Span::styled("[-=] ", w), Span::raw("Adjust  │  "),
-            Span::styled("[Space] ", w), Span::raw("On/Off  │  "),
-            Span::styled("[Space col 4-6] ", w), Span::raw("Route S1/S2/DR"),
+            Span::styled("[Enter] ", w), Span::raw("On/Off  │  "),
+            Span::styled("[Space col 4-6] ", w), Span::raw("Route/Duck S1/S2 0↔100%"),
         ]),
     };
 

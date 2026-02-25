@@ -194,7 +194,7 @@ impl DrumVoice {
 /// and a per-track effects insert chain.
 pub struct DrumTrack {
     pub kind:  DrumKind,
-    pub steps: Vec<bool>,
+    pub steps: Vec<u8>,
     pub muted: bool,
     pub volume: f32,
     /// Per-track insert effects (e.g. compression, EQ). Empty = passthrough.
@@ -206,7 +206,7 @@ impl DrumTrack {
     fn new(kind: DrumKind, num_steps: usize) -> Self {
         Self {
             kind,
-            steps: vec![false; num_steps],
+            steps: vec![0u8; num_steps],
             muted: false,
             volume: 0.85,
             fx: EffectChain::new(),
@@ -228,6 +228,7 @@ pub struct DrumMachine {
     pub num_steps:    usize,
     pub current_step: usize,
     pub playing:      bool,
+    pub swing:        f32,  // 0.0 = straight, ~0.33 = shuffle, 0.5 = maximum
     /// Master insert effects applied to the summed drum bus output.
     pub fx: EffectChain,
 
@@ -236,6 +237,10 @@ pub struct DrumMachine {
     voices: Vec<DrumVoice>,
     /// Seed advanced before each trigger so every hit has a distinct noise flavour.
     seed: u32,
+    /// Separate XOR-shift seed used only for probability rolls.
+    prob_seed: u32,
+    /// Set to true each sample that a kick fires; cleared by Synth::generate_sample.
+    pub kick_triggered: bool,
 }
 
 impl DrumMachine {
@@ -247,10 +252,13 @@ impl DrumMachine {
             num_steps,
             current_step: 0,
             playing: false,
+            swing: 0.0,
             fx: EffectChain::new(),
             sample_rate,
             voices: Vec::with_capacity(32),
             seed: 0xBEEF_CAFE,
+            prob_seed: 0xDEAD_BEEF,
+            kick_triggered: false,
         }
     }
 
@@ -265,7 +273,14 @@ impl DrumMachine {
         let step_idx = (clock / sps) as usize % self.num_steps;
         let phase_in = clock % sps;
 
-        if self.playing && phase_in == 0 {
+        // Odd steps are delayed by swing fraction of one step width
+        let swing_offset = if step_idx % 2 == 1 {
+            (self.swing * sps as f32).round() as u64
+        } else {
+            0
+        };
+
+        if self.playing && phase_in == swing_offset {
             self.current_step = step_idx;
             self.fire_step();
         } else {
@@ -291,7 +306,7 @@ impl DrumMachine {
         let closed_fires = self.tracks.iter().any(|t| {
             t.kind == DrumKind::ClosedHat
                 && !t.muted
-                && t.steps.get(self.current_step).copied().unwrap_or(false)
+                && t.steps.get(self.current_step).copied().unwrap_or(0) > 0
         });
         if closed_fires {
             self.voices.retain(|v| v.kind != DrumKind::OpenHat);
@@ -299,10 +314,23 @@ impl DrumMachine {
 
         for track in &mut self.tracks {
             if track.muted { continue; }
-            if !track.steps.get(self.current_step).copied().unwrap_or(false) { continue; }
+            let prob = track.steps.get(self.current_step).copied().unwrap_or(0);
+            if prob == 0 { continue; }
+
+            // Probability roll
+            if prob < 100 {
+                self.prob_seed ^= self.prob_seed << 13;
+                self.prob_seed ^= self.prob_seed >> 17;
+                self.prob_seed ^= self.prob_seed << 5;
+                let roll = (self.prob_seed % 100) as u8;
+                if roll >= prob { continue; }
+            }
 
             // Unique noise seed per trigger for timbral variation
             self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if track.kind == DrumKind::Kick {
+                self.kick_triggered = true;
+            }
             self.voices.push(DrumVoice::new(track.kind, self.sample_rate, self.seed, track.volume));
         }
     }
@@ -331,7 +359,7 @@ impl DrumMachine {
     pub fn toggle_step(&mut self, track: usize, step: usize) {
         if let Some(t) = self.tracks.get_mut(track) {
             if let Some(s) = t.steps.get_mut(step) {
-                *s = !*s;
+                if *s == 0 { *s = 100; } else { *s = 0; }
             }
         }
     }
@@ -339,7 +367,7 @@ impl DrumMachine {
     pub fn clear_step(&mut self, track: usize, step: usize) {
         if let Some(t) = self.tracks.get_mut(track) {
             if let Some(s) = t.steps.get_mut(step) {
-                *s = false;
+                *s = 0;
             }
         }
     }
@@ -371,10 +399,40 @@ impl DrumMachine {
         };
         self.num_steps = next;
         for t in &mut self.tracks {
-            t.steps.resize(next, false);
+            t.steps.resize(next, 0);
         }
         if self.current_step >= next {
             self.current_step = 0;
+        }
+    }
+
+    pub fn step_prob_up(&mut self, track: usize, step: usize) {
+        if let Some(t) = self.tracks.get_mut(track) {
+            if let Some(s) = t.steps.get_mut(step) {
+                *s = (*s + 25).min(100);
+                if *s == 0 { *s = 25; }
+            }
+        }
+    }
+
+    pub fn step_prob_down(&mut self, track: usize, step: usize) {
+        if let Some(t) = self.tracks.get_mut(track) {
+            if let Some(s) = t.steps.get_mut(step) {
+                if *s <= 25 { *s = 0; } else { *s -= 25; }
+            }
+        }
+    }
+
+    pub fn euclidean_fill(&mut self, track: usize, k: usize) {
+        let n = self.num_steps;
+        if let Some(t) = self.tracks.get_mut(track) {
+            let k = k.min(n);
+            t.steps = vec![0u8; n];
+            let mut bucket = 0usize;
+            for i in 0..n {
+                bucket += k;
+                if bucket >= n { bucket -= n; t.steps[i] = 100; }
+            }
         }
     }
 }

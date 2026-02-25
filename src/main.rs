@@ -98,8 +98,11 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                             KeyCode::Right if app.mode == AppMode::Drums => app.drum_step_right(),
                             KeyCode::Char('=') if app.mode == AppMode::Drums => app.drum_vol_up(),
                             KeyCode::Char('-') if app.mode == AppMode::Drums => app.drum_vol_down(),
+                            KeyCode::Char('p') if app.mode == AppMode::Drums => app.drum_prob_up(),
+                            KeyCode::Char('[') if app.mode == AppMode::Drums => app.drum_prob_down(),
 
                             // SynthSeq2 focus: cursor + BPM + volume + octave
+                            KeyCode::Enter if app.mode == AppMode::SynthSeq2 => app.seq2_toggle_play(),
                             KeyCode::Left  if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_left(),
                             KeyCode::Right if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_right(),
                             KeyCode::Up    if app.mode == AppMode::SynthSeq2 => app.bpm_up(),
@@ -110,6 +113,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                             KeyCode::Char('{') if app.mode == AppMode::SynthSeq2 => app.octave_up(),
 
                             // SynthSeq focus: cursor + BPM + volume + octave
+                            KeyCode::Enter if app.mode == AppMode::SynthSeq => app.seq_toggle_play(),
                             KeyCode::Left  if app.mode == AppMode::SynthSeq => app.seq_cursor_left(),
                             KeyCode::Right if app.mode == AppMode::SynthSeq => app.seq_cursor_right(),
                             KeyCode::Up    if app.mode == AppMode::SynthSeq => app.bpm_up(),
@@ -155,7 +159,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Right if app.mode == AppMode::Effects => app.effects_param_right(),
                         KeyCode::Char('=') if app.mode == AppMode::Effects => app.effects_param_inc(),
                         KeyCode::Char('-') if app.mode == AppMode::Effects => app.effects_param_dec(),
-                        KeyCode::Char(' ') if app.mode == AppMode::Effects => app.effects_toggle(),
+                        KeyCode::Enter     if app.mode == AppMode::Effects => app.effects_on_off(),
+                        KeyCode::Char(' ') if app.mode == AppMode::Effects => app.effects_route_toggle(),
 
                         // ── Drums focus ───────────────────────────────────
                         KeyCode::Up    if app.mode == AppMode::Drums => app.drum_track_up(),
@@ -169,6 +174,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Char('\\') if app.mode == AppMode::Drums => app.drum_toggle_mute(),
                         KeyCode::Char('=')  if app.mode == AppMode::Drums => app.drum_vol_up(),
                         KeyCode::Char('-')  if app.mode == AppMode::Drums => app.drum_vol_down(),
+                        KeyCode::Char('p')  if app.mode == AppMode::Drums => app.drum_prob_up(),
+                        KeyCode::Char('[')  if app.mode == AppMode::Drums => app.drum_prob_down(),
+                        KeyCode::Char('e')  if app.mode == AppMode::Drums => app.drum_euclidean(),
 
                         // ── SynthSeq2 focus ───────────────────────────────
                         KeyCode::Left  if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_left(),
@@ -176,6 +184,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Up    if app.mode == AppMode::SynthSeq2 => app.bpm_up(),
                         KeyCode::Down  if app.mode == AppMode::SynthSeq2 => app.bpm_down(),
                         KeyCode::Char(' ') if app.mode == AppMode::SynthSeq2 => app.seq2_toggle_play(),
+                        KeyCode::Enter     if app.mode == AppMode::SynthSeq2 => app.seq2_toggle_play(),
                         KeyCode::Backspace | KeyCode::Delete if app.mode == AppMode::SynthSeq2 => app.seq2_clear_step(),
                         KeyCode::Char(']') if app.mode == AppMode::SynthSeq2 => app.seq2_cycle_steps(),
                         KeyCode::F(5)      if app.mode == AppMode::SynthSeq2 => app.cycle_wave2(),
@@ -190,6 +199,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Up    if app.mode == AppMode::SynthSeq => app.bpm_up(),
                         KeyCode::Down  if app.mode == AppMode::SynthSeq => app.bpm_down(),
                         KeyCode::Char(' ') if app.mode == AppMode::SynthSeq => app.seq_toggle_play(),
+                        KeyCode::Enter     if app.mode == AppMode::SynthSeq => app.seq_toggle_play(),
                         KeyCode::Backspace | KeyCode::Delete if app.mode == AppMode::SynthSeq => app.seq_clear_step(),
                         KeyCode::Char(']') if app.mode == AppMode::SynthSeq => app.seq_cycle_steps(),
                         KeyCode::Char('=') if app.mode == AppMode::SynthSeq => app.volume_up(),
