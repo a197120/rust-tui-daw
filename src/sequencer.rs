@@ -14,8 +14,7 @@ pub struct Sequencer {
     pub current_step: usize,
     pub playing:      bool,
 
-    sample_rate:    f32,
-    sample_counter: u64,
+    sample_rate: f32,
 }
 
 impl Sequencer {
@@ -26,7 +25,6 @@ impl Sequencer {
             current_step: 0,
             playing:      false,
             sample_rate,
-            sample_counter: 0,
         }
     }
 
@@ -34,39 +32,32 @@ impl Sequencer {
         ((self.sample_rate * 60.0) / (bpm * 4.0)).round() as u64
     }
 
-    /// Called once per audio sample.  Returns `Some(StepEvent)` on step boundaries.
-    pub fn tick(&mut self, bpm: f32) -> Option<StepEvent> {
-        if !self.playing {
-            return None;
-        }
+    /// Called once per audio sample with the shared master clock.
+    /// Returns `Some(StepEvent)` on step boundaries.
+    pub fn tick(&mut self, bpm: f32, clock: u64) -> Option<StepEvent> {
+        if !self.playing { return None; }
 
         let sps = self.samples_per_step(bpm).max(1);
-        let old = self.sample_counter;
-        self.sample_counter += 1;
+        let step_idx = (clock / sps) as usize % self.num_steps;
+        let phase_in = clock % sps;
 
-        let event = if old == 0 {
-            let prev = if self.current_step == 0 { self.num_steps - 1 } else { self.current_step - 1 };
+        self.current_step = step_idx;
+
+        if phase_in == 0 {
+            let prev = if step_idx == 0 { self.num_steps - 1 } else { step_idx - 1 };
             Some(StepEvent {
                 note_off: self.steps[prev],
-                note_on:  self.steps[self.current_step],
+                note_on:  self.steps[step_idx],
             })
         } else {
             None
-        };
-
-        if self.sample_counter >= sps {
-            self.sample_counter = 0;
-            self.current_step = (self.current_step + 1) % self.num_steps;
         }
-
-        event
     }
 
     /// Toggle play/pause.  Returns the note currently held (for note-off).
     pub fn toggle_play(&mut self) -> Option<u8> {
         self.playing = !self.playing;
         if self.playing {
-            self.sample_counter = 0;
             None
         } else {
             self.steps.get(self.current_step).copied().flatten()
@@ -78,7 +69,6 @@ impl Sequencer {
         let note = if self.playing { self.steps.get(self.current_step).copied().flatten() } else { None };
         self.playing      = false;
         self.current_step = 0;
-        self.sample_counter = 0;
         note
     }
 

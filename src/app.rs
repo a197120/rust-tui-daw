@@ -36,10 +36,14 @@ pub fn key_to_note(key: char, base_octave: i32) -> Option<u8> {
 pub enum AppMode {
     /// Live keyboard play.
     Play,
-    /// Edit the melodic step sequencer.
+    /// Edit the melodic step sequencer 1.
     SynthSeq,
+    /// Edit the melodic step sequencer 2.
+    SynthSeq2,
     /// Edit the drum machine.
     Drums,
+    /// Adjust master output effects.
+    Effects,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -55,12 +59,19 @@ pub struct App {
 
     pub mode: AppMode,
 
-    // Melodic sequencer cursor
+    // Melodic sequencer 1 cursor
     pub seq_cursor: usize,
+
+    // Melodic sequencer 2 cursor
+    pub seq2_cursor: usize,
 
     // Drum machine cursors
     pub drum_track: usize,  // selected track (row)
     pub drum_step:  usize,  // selected step (column)
+
+    // Effects panel cursors
+    pub effects_sel:   usize,  // 0=Reverb 1=Delay 2=Distortion
+    pub effects_param: usize,  // 0-2 = effect param; 3-5 = S1/S2/DR send level
 }
 
 impl App {
@@ -75,8 +86,11 @@ impl App {
             status_msg:   String::new(),
             mode:         AppMode::Play,
             seq_cursor:   0,
+            seq2_cursor:  0,
             drum_track:   0,
             drum_step:    0,
+            effects_sel:   0,
+            effects_param: 0,
         }
     }
 
@@ -149,6 +163,12 @@ impl App {
         self.status_msg = format!("Wave: {}", s.wave_type.name());
     }
 
+    pub fn cycle_wave2(&mut self) {
+        let mut s = self.synth.lock().unwrap();
+        s.wave_type2 = s.wave_type2.next();
+        self.status_msg = format!("Synth2 Wave: {}", s.wave_type2.name());
+    }
+
     pub fn volume_up(&mut self) {
         let mut s = self.synth.lock().unwrap();
         s.volume = (s.volume + 0.05).min(1.0);
@@ -200,28 +220,36 @@ impl App {
         self.synth.lock().unwrap().sequencer.playing
     }
 
+    pub fn seq2_playing(&self) -> bool {
+        self.synth.lock().unwrap().sequencer2.playing
+    }
+
     pub fn drum_playing(&self) -> bool {
         self.synth.lock().unwrap().drum_machine.playing
     }
 
     // ── Mode cycling ──────────────────────────────────────────────────────
 
-    /// Cycle focus: Keyboard → SynthSeq → Drums → Keyboard.
+    /// Cycle focus: Keyboard → SynthSeq → SynthSeq2 → Drums → Effects → Keyboard.
     pub fn toggle_mode(&mut self) {
         self.release_all();
         self.mode = match self.mode {
-            AppMode::Play     => AppMode::SynthSeq,
-            AppMode::SynthSeq => AppMode::Drums,
-            AppMode::Drums    => AppMode::Play,
+            AppMode::Play      => AppMode::SynthSeq,
+            AppMode::SynthSeq  => AppMode::SynthSeq2,
+            AppMode::SynthSeq2 => AppMode::Drums,
+            AppMode::Drums     => AppMode::Effects,
+            AppMode::Effects   => AppMode::Play,
         };
         self.status_msg = match self.mode {
-            AppMode::Play     => "Focus: Keyboard".to_string(),
-            AppMode::SynthSeq => "Focus: Synth Seq".to_string(),
-            AppMode::Drums    => "Focus: Drums".to_string(),
+            AppMode::Play      => "Focus: Keyboard".to_string(),
+            AppMode::SynthSeq  => "Focus: Synth Seq".to_string(),
+            AppMode::SynthSeq2 => "Focus: Synth Seq 2".to_string(),
+            AppMode::Drums     => "Focus: Drums".to_string(),
+            AppMode::Effects   => "Focus: Effects".to_string(),
         };
     }
 
-    // ── Melodic sequencer controls ────────────────────────────────────────
+    // ── Melodic sequencer 1 controls ──────────────────────────────────────
 
     pub fn seq_cursor_left(&mut self) {
         let n = self.synth.lock().unwrap().sequencer.num_steps;
@@ -265,6 +293,52 @@ impl App {
         drop(s);
         if self.seq_cursor >= n { self.seq_cursor = 0; }
         self.status_msg = format!("Seq steps: {}", n);
+    }
+
+    // ── Melodic sequencer 2 controls ──────────────────────────────────────
+
+    pub fn seq2_cursor_left(&mut self) {
+        let n = self.synth.lock().unwrap().sequencer2.num_steps;
+        self.seq2_cursor = if self.seq2_cursor == 0 { n - 1 } else { self.seq2_cursor - 1 };
+    }
+
+    pub fn seq2_cursor_right(&mut self) {
+        let n = self.synth.lock().unwrap().sequencer2.num_steps;
+        self.seq2_cursor = (self.seq2_cursor + 1) % n;
+    }
+
+    pub fn seq2_set_note(&mut self, key: char) {
+        let Some(note) = key_to_note(key, self.base_octave) else { return };
+        let cursor = self.seq2_cursor;
+        let n = {
+            let mut s = self.synth.lock().unwrap();
+            s.sequencer2.set_step(cursor, note);
+            s.sequencer2.num_steps
+        };
+        self.status_msg = format!("Seq2 step {}: {}", cursor + 1, note_name(note));
+        self.seq2_cursor = (cursor + 1) % n;
+    }
+
+    pub fn seq2_clear_step(&mut self) {
+        let cursor = self.seq2_cursor;
+        self.synth.lock().unwrap().sequencer2.clear_step(cursor);
+        self.status_msg = format!("Seq2 step {} cleared", cursor + 1);
+    }
+
+    pub fn seq2_toggle_play(&mut self) {
+        let mut s = self.synth.lock().unwrap();
+        if let Some(note) = s.sequencer2.toggle_play() { s.note_off2(note); }
+        self.status_msg = if s.sequencer2.playing { "Seq2: Playing".to_string() }
+                          else                    { "Seq2: Paused".to_string() };
+    }
+
+    pub fn seq2_cycle_steps(&mut self) {
+        let mut s = self.synth.lock().unwrap();
+        s.sequencer2.cycle_num_steps();
+        let n = s.sequencer2.num_steps;
+        drop(s);
+        if self.seq2_cursor >= n { self.seq2_cursor = 0; }
+        self.status_msg = format!("Seq2 steps: {}", n);
     }
 
     // ── Drum machine controls ─────────────────────────────────────────────
@@ -354,5 +428,191 @@ impl App {
             _ => return,
         };
         self.synth.lock().unwrap().drum_machine.trigger_now(idx);
+    }
+
+    // ── Effects controls ──────────────────────────────────────────────────
+
+    pub fn effects_sel_up(&mut self) {
+        self.effects_sel = if self.effects_sel == 0 { 2 } else { self.effects_sel - 1 };
+    }
+
+    pub fn effects_sel_down(&mut self) {
+        self.effects_sel = (self.effects_sel + 1) % 3;
+    }
+
+    /// Left/right cycles through params 0–5 (0-2=effect params, 3-5=send levels).
+    pub fn effects_param_left(&mut self) {
+        self.effects_param = if self.effects_param == 0 { 5 } else { self.effects_param - 1 };
+    }
+
+    pub fn effects_param_right(&mut self) {
+        self.effects_param = (self.effects_param + 1) % 6;
+    }
+
+    /// Space: toggle effect on/off (params 0-2) or quick-toggle send 0↔1 (params 3-5).
+    pub fn effects_toggle(&mut self) {
+        let sel = self.effects_sel;
+        let par = self.effects_param;
+
+        if par >= 3 {
+            // Routing: quick-toggle send level 0.0 ↔ 1.0
+            let ri = par - 3;
+            let msg = {
+                let mut s = self.synth.lock().unwrap();
+                let rt = &mut s.fx_routing;
+                let (val, name) = match (sel, ri) {
+                    (0, 0) => { rt.s1_reverb = if rt.s1_reverb > 0.5 { 0.0 } else { 1.0 }; (rt.s1_reverb, "S1→Rev") }
+                    (0, 1) => { rt.s2_reverb = if rt.s2_reverb > 0.5 { 0.0 } else { 1.0 }; (rt.s2_reverb, "S2→Rev") }
+                    (0, 2) => { rt.dr_reverb = if rt.dr_reverb > 0.5 { 0.0 } else { 1.0 }; (rt.dr_reverb, "DR→Rev") }
+                    (1, 0) => { rt.s1_delay  = if rt.s1_delay  > 0.5 { 0.0 } else { 1.0 }; (rt.s1_delay,  "S1→Dly") }
+                    (1, 1) => { rt.s2_delay  = if rt.s2_delay  > 0.5 { 0.0 } else { 1.0 }; (rt.s2_delay,  "S2→Dly") }
+                    (1, 2) => { rt.dr_delay  = if rt.dr_delay  > 0.5 { 0.0 } else { 1.0 }; (rt.dr_delay,  "DR→Dly") }
+                    (2, 0) => { rt.s1_dist   = if rt.s1_dist   > 0.5 { 0.0 } else { 1.0 }; (rt.s1_dist,   "S1→Dst") }
+                    (2, 1) => { rt.s2_dist   = if rt.s2_dist   > 0.5 { 0.0 } else { 1.0 }; (rt.s2_dist,   "S2→Dst") }
+                    (2, 2) => { rt.dr_dist   = if rt.dr_dist   > 0.5 { 0.0 } else { 1.0 }; (rt.dr_dist,   "DR→Dst") }
+                    _ => (0.0, ""),
+                };
+                format!("{}: {:.0}%", name, val * 100.0)
+            };
+            self.status_msg = msg;
+        } else {
+            // Effect on/off toggle
+            let msg = {
+                let mut s = self.synth.lock().unwrap();
+                match sel {
+                    0 => { s.reverb.enabled = !s.reverb.enabled;
+                           format!("Reverb: {}", if s.reverb.enabled { "ON" } else { "OFF" }) }
+                    1 => { s.delay.enabled = !s.delay.enabled;
+                           format!("Delay: {}", if s.delay.enabled { "ON" } else { "OFF" }) }
+                    _ => { s.distortion.enabled = !s.distortion.enabled;
+                           format!("Distortion: {}", if s.distortion.enabled { "ON" } else { "OFF" }) }
+                }
+            };
+            self.status_msg = msg;
+        }
+    }
+
+    pub fn effects_param_inc(&mut self) {
+        let (sel, param) = (self.effects_sel, self.effects_param);
+
+        if param >= 3 {
+            let ri = param - 3;
+            let msg = {
+                let mut s = self.synth.lock().unwrap();
+                let rt = &mut s.fx_routing;
+                let (val, name) = match (sel, ri) {
+                    (0, 0) => { rt.s1_reverb = (rt.s1_reverb + 0.05).clamp(0.0, 1.0); (rt.s1_reverb, "S1→Rev") }
+                    (0, 1) => { rt.s2_reverb = (rt.s2_reverb + 0.05).clamp(0.0, 1.0); (rt.s2_reverb, "S2→Rev") }
+                    (0, 2) => { rt.dr_reverb = (rt.dr_reverb + 0.05).clamp(0.0, 1.0); (rt.dr_reverb, "DR→Rev") }
+                    (1, 0) => { rt.s1_delay  = (rt.s1_delay  + 0.05).clamp(0.0, 1.0); (rt.s1_delay,  "S1→Dly") }
+                    (1, 1) => { rt.s2_delay  = (rt.s2_delay  + 0.05).clamp(0.0, 1.0); (rt.s2_delay,  "S2→Dly") }
+                    (1, 2) => { rt.dr_delay  = (rt.dr_delay  + 0.05).clamp(0.0, 1.0); (rt.dr_delay,  "DR→Dly") }
+                    (2, 0) => { rt.s1_dist   = (rt.s1_dist   + 0.05).clamp(0.0, 1.0); (rt.s1_dist,   "S1→Dst") }
+                    (2, 1) => { rt.s2_dist   = (rt.s2_dist   + 0.05).clamp(0.0, 1.0); (rt.s2_dist,   "S2→Dst") }
+                    (2, 2) => { rt.dr_dist   = (rt.dr_dist   + 0.05).clamp(0.0, 1.0); (rt.dr_dist,   "DR→Dst") }
+                    _ => (0.0, ""),
+                };
+                format!("{}: {:.0}%", name, val * 100.0)
+            };
+            self.status_msg = msg;
+        } else {
+            let msg = {
+                let mut s = self.synth.lock().unwrap();
+                match sel {
+                    0 => match param {
+                        0 => { s.reverb.room_size = (s.reverb.room_size + 0.05).clamp(0.0, 1.0);
+                               format!("Reverb Room: {:.0}%", s.reverb.room_size * 100.0) }
+                        1 => { s.reverb.damping = (s.reverb.damping + 0.05).clamp(0.0, 1.0);
+                               format!("Reverb Damp: {:.0}%", s.reverb.damping * 100.0) }
+                        _ => { s.reverb.mix = (s.reverb.mix + 0.05).clamp(0.0, 1.0);
+                               format!("Reverb Mix: {:.0}%", s.reverb.mix * 100.0) }
+                    },
+                    1 => match param {
+                        0 => { s.delay.time_ms = (s.delay.time_ms + 25.0).clamp(10.0, 1000.0);
+                               format!("Delay Time: {:.0}ms", s.delay.time_ms) }
+                        1 => { s.delay.feedback = (s.delay.feedback + 0.05).clamp(0.0, 0.95);
+                               format!("Delay Feed: {:.0}%", s.delay.feedback * 100.0) }
+                        _ => { s.delay.mix = (s.delay.mix + 0.05).clamp(0.0, 1.0);
+                               format!("Delay Mix: {:.0}%", s.delay.mix * 100.0) }
+                    },
+                    _ => match param {
+                        0 => { s.distortion.drive = (s.distortion.drive + 0.5).clamp(1.0, 10.0);
+                               format!("Dist Drive: {:.1}x", s.distortion.drive) }
+                        1 => { s.distortion.tone = (s.distortion.tone + 0.05).clamp(0.0, 1.0);
+                               format!("Dist Tone: {:.0}%", s.distortion.tone * 100.0) }
+                        _ => { s.distortion.level = (s.distortion.level + 0.05).clamp(0.0, 1.0);
+                               format!("Dist Level: {:.0}%", s.distortion.level * 100.0) }
+                    },
+                }
+            };
+            self.status_msg = msg;
+        }
+    }
+
+    pub fn effects_param_dec(&mut self) {
+        let (sel, param) = (self.effects_sel, self.effects_param);
+
+        if param >= 3 {
+            let ri = param - 3;
+            let msg = {
+                let mut s = self.synth.lock().unwrap();
+                let rt = &mut s.fx_routing;
+                let (val, name) = match (sel, ri) {
+                    (0, 0) => { rt.s1_reverb = (rt.s1_reverb - 0.05).clamp(0.0, 1.0); (rt.s1_reverb, "S1→Rev") }
+                    (0, 1) => { rt.s2_reverb = (rt.s2_reverb - 0.05).clamp(0.0, 1.0); (rt.s2_reverb, "S2→Rev") }
+                    (0, 2) => { rt.dr_reverb = (rt.dr_reverb - 0.05).clamp(0.0, 1.0); (rt.dr_reverb, "DR→Rev") }
+                    (1, 0) => { rt.s1_delay  = (rt.s1_delay  - 0.05).clamp(0.0, 1.0); (rt.s1_delay,  "S1→Dly") }
+                    (1, 1) => { rt.s2_delay  = (rt.s2_delay  - 0.05).clamp(0.0, 1.0); (rt.s2_delay,  "S2→Dly") }
+                    (1, 2) => { rt.dr_delay  = (rt.dr_delay  - 0.05).clamp(0.0, 1.0); (rt.dr_delay,  "DR→Dly") }
+                    (2, 0) => { rt.s1_dist   = (rt.s1_dist   - 0.05).clamp(0.0, 1.0); (rt.s1_dist,   "S1→Dst") }
+                    (2, 1) => { rt.s2_dist   = (rt.s2_dist   - 0.05).clamp(0.0, 1.0); (rt.s2_dist,   "S2→Dst") }
+                    (2, 2) => { rt.dr_dist   = (rt.dr_dist   - 0.05).clamp(0.0, 1.0); (rt.dr_dist,   "DR→Dst") }
+                    _ => (0.0, ""),
+                };
+                format!("{}: {:.0}%", name, val * 100.0)
+            };
+            self.status_msg = msg;
+        } else {
+            let msg = {
+                let mut s = self.synth.lock().unwrap();
+                match sel {
+                    0 => match param {
+                        0 => { s.reverb.room_size = (s.reverb.room_size - 0.05).clamp(0.0, 1.0);
+                               format!("Reverb Room: {:.0}%", s.reverb.room_size * 100.0) }
+                        1 => { s.reverb.damping = (s.reverb.damping - 0.05).clamp(0.0, 1.0);
+                               format!("Reverb Damp: {:.0}%", s.reverb.damping * 100.0) }
+                        _ => { s.reverb.mix = (s.reverb.mix - 0.05).clamp(0.0, 1.0);
+                               format!("Reverb Mix: {:.0}%", s.reverb.mix * 100.0) }
+                    },
+                    1 => match param {
+                        0 => { s.delay.time_ms = (s.delay.time_ms - 25.0).clamp(10.0, 1000.0);
+                               format!("Delay Time: {:.0}ms", s.delay.time_ms) }
+                        1 => { s.delay.feedback = (s.delay.feedback - 0.05).clamp(0.0, 0.95);
+                               format!("Delay Feed: {:.0}%", s.delay.feedback * 100.0) }
+                        _ => { s.delay.mix = (s.delay.mix - 0.05).clamp(0.0, 1.0);
+                               format!("Delay Mix: {:.0}%", s.delay.mix * 100.0) }
+                    },
+                    _ => match param {
+                        0 => { s.distortion.drive = (s.distortion.drive - 0.5).clamp(1.0, 10.0);
+                               format!("Dist Drive: {:.1}x", s.distortion.drive) }
+                        1 => { s.distortion.tone = (s.distortion.tone - 0.05).clamp(0.0, 1.0);
+                               format!("Dist Tone: {:.0}%", s.distortion.tone * 100.0) }
+                        _ => { s.distortion.level = (s.distortion.level - 0.05).clamp(0.0, 1.0);
+                               format!("Dist Level: {:.0}%", s.distortion.level * 100.0) }
+                    },
+                }
+            };
+            self.status_msg = msg;
+        }
+    }
+
+    /// Returns FX active indicators for the title bar (one lock acquisition).
+    pub fn fx_indicators(&self) -> String {
+        let s = self.synth.lock().unwrap();
+        let mut ind = String::new();
+        if s.reverb.enabled     { ind.push_str("  ▶RVB"); }
+        if s.delay.enabled      { ind.push_str("  ▶DLY"); }
+        if s.distortion.enabled { ind.push_str("  ▶DST"); }
+        ind
     }
 }

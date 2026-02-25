@@ -13,7 +13,7 @@ use crate::synth::note_name;
 
 // ── Top-level routing ─────────────────────────────────────────────────────────
 
-/// Draw all three panels simultaneously.  `app.mode` controls which panel has
+/// Draw all panels simultaneously.  `app.mode` controls which panel has
 /// keyboard focus (highlighted border), not what is visible.
 pub fn draw(f: &mut Frame, app: &App, enhanced: bool) {
     let area = f.area();
@@ -22,8 +22,10 @@ pub fn draw(f: &mut Frame, app: &App, enhanced: bool) {
         .constraints([
             Constraint::Length(3),  // title bar
             Constraint::Length(12), // piano keyboard
-            Constraint::Length(8),  // melodic step sequencer
+            Constraint::Length(8),  // melodic step sequencer 1
+            Constraint::Length(8),  // melodic step sequencer 2
             Constraint::Length(12), // drum machine
+            Constraint::Length(5),  // effects
             Constraint::Length(4),  // status
             Constraint::Min(0),     // help
         ])
@@ -32,26 +34,32 @@ pub fn draw(f: &mut Frame, app: &App, enhanced: bool) {
     draw_title(f, chunks[0], enhanced, app);
     draw_piano(f, chunks[1], app);
     draw_synth_seq(f, chunks[2], app);
-    draw_drums(f, chunks[3], app);
-    draw_status(f, chunks[4], app);
-    draw_help(f, chunks[5], app);
+    draw_synth_seq2(f, chunks[3], app);
+    draw_drums(f, chunks[4], app);
+    draw_effects(f, chunks[5], app);
+    draw_status(f, chunks[6], app);
+    draw_help(f, chunks[7], app);
 }
 
 // ── Title bar ─────────────────────────────────────────────────────────────────
 
 fn draw_title(f: &mut Frame, area: Rect, enhanced: bool, app: &App) {
     let focus_label = match app.mode {
-        AppMode::Play     => "Keyboard",
-        AppMode::SynthSeq => "Synth Seq",
-        AppMode::Drums    => "Drums",
+        AppMode::Play      => "Keyboard",
+        AppMode::SynthSeq  => "Synth Seq",
+        AppMode::SynthSeq2 => "Synth Seq 2",
+        AppMode::Drums     => "Drums",
+        AppMode::Effects   => "Effects",
     };
     let kb_mode  = if enhanced { "enhanced" } else { "fallback" };
     let seq_ind  = if app.seq_playing()  { "  ▶SEQ"  } else { "" };
+    let seq2_ind = if app.seq2_playing() { "  ▶SEQ2" } else { "" };
     let drum_ind = if app.drum_playing() { "  ▶DRUM" } else { "" };
+    let fx_ind   = app.fx_indicators();
 
     let text = format!(
-        "  RustTuiSynth  ─  Focus: {}{}{}  ─  [{}]  ─  Tab/F2: cycle focus  F1: wave  F3: drums",
-        focus_label, seq_ind, drum_ind, kb_mode
+        "  RustTuiSynth  ─  Focus: {}{}{}{}{}  ─  [{}]  ─  Tab/F2: cycle focus  F1: wave  F3: drums",
+        focus_label, seq_ind, seq2_ind, drum_ind, fx_ind, kb_mode
     );
     let color = if enhanced { Color::Cyan } else { Color::Yellow };
     f.render_widget(
@@ -252,7 +260,6 @@ fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
     let cursor = app.seq_cursor;
     let mut lines: Vec<Line> = Vec::new();
 
-    // Header — BPM + status only (key hints are in the block title)
     let (status_str, status_color) =
         if playing { ("▶ PLAYING", Color::Green) } else { ("■ STOPPED", Color::DarkGray) };
     lines.push(Line::from(vec![
@@ -267,12 +274,10 @@ fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(format!("Oct:{}", app.base_octave), Style::default().fg(Color::DarkGray)),
     ]));
 
-    // Step rows — up to 16 per row
     let per_row = if num_steps <= 8 { 8 } else { 16 };
     for chunk_start in (0..num_steps).step_by(per_row) {
         let chunk_end = (chunk_start + per_row).min(num_steps);
 
-        // Step number line
         let mut nums = Vec::new();
         for i in chunk_start..chunk_end {
             let is_ph = playing && i == current_step;
@@ -285,7 +290,6 @@ fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
         }
         lines.push(Line::from(nums));
 
-        // Step cell line — each cell 5 chars [xxx]
         let mut cells = Vec::new();
         for i in chunk_start..chunk_end {
             let is_ph = playing && i == current_step;
@@ -304,7 +308,97 @@ fn draw_synth_seq(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(cells));
     }
 
-    // Cursor info line
+    let note_disp = steps.get(cursor).copied().flatten()
+        .map(|n| note_name(n)).unwrap_or_else(|| "·".to_string());
+    lines.push(Line::from(vec![
+        Span::styled("Cursor: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("step {}/{}  note: {}", cursor + 1, num_steps, note_disp),
+            Style::default().fg(Color::White),
+        ),
+    ]));
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default().title(title).borders(Borders::ALL)
+                .border_style(if focused {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                })
+        ),
+        area,
+    );
+}
+
+// ── Melodic step sequencer 2 ──────────────────────────────────────────────────
+
+fn draw_synth_seq2(f: &mut Frame, area: Rect, app: &App) {
+    let focused = app.mode == AppMode::SynthSeq2;
+    let title = if focused {
+        " ► Synth Seq 2 — [←→] Cursor  [↑↓] BPM  [Space] Play  [Del] Clear  []] Steps  [F5] Wave "
+    } else {
+        " Synth Seq 2 "
+    };
+
+    let (bpm, num_steps, current_step, playing, steps, wave_name) = {
+        let s = app.synth.lock().unwrap();
+        (s.bpm, s.sequencer2.num_steps, s.sequencer2.current_step,
+         s.sequencer2.playing, s.sequencer2.steps.clone(),
+         s.wave_type2.name().to_string())
+    };
+    let cursor = app.seq2_cursor;
+    let mut lines: Vec<Line> = Vec::new();
+
+    let (status_str, status_color) =
+        if playing { ("▶ PLAYING", Color::Green) } else { ("■ STOPPED", Color::DarkGray) };
+    lines.push(Line::from(vec![
+        Span::styled("BPM: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{:.0}", bpm), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled("Steps: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{}", num_steps), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled(status_str, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled("Wave: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(wave_name, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+    ]));
+
+    let per_row = if num_steps <= 8 { 8 } else { 16 };
+    for chunk_start in (0..num_steps).step_by(per_row) {
+        let chunk_end = (chunk_start + per_row).min(num_steps);
+
+        let mut nums = Vec::new();
+        for i in chunk_start..chunk_end {
+            let is_ph = playing && i == current_step;
+            let is_cu = i == cursor;
+            let sty = if is_ph && is_cu { Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD) }
+                      else if is_ph     { Style::default().fg(Color::Black).bg(Color::Green) }
+                      else if is_cu     { Style::default().fg(Color::Black).bg(Color::Yellow) }
+                      else              { Style::default().fg(Color::DarkGray) };
+            nums.push(Span::styled(format!("{:^5}", i + 1), sty));
+        }
+        lines.push(Line::from(nums));
+
+        let mut cells = Vec::new();
+        for i in chunk_start..chunk_end {
+            let is_ph = playing && i == current_step;
+            let is_cu = i == cursor;
+            let cell = match steps[i] {
+                Some(n) => format!("[{:<3}]", note_name(n)),
+                None    => "[ · ]".to_string(),
+            };
+            let sty = if is_ph && is_cu   { Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD) }
+                      else if is_ph       { Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD) }
+                      else if is_cu       { Style::default().fg(Color::Black).bg(Color::Yellow) }
+                      else if steps[i].is_some() { Style::default().fg(Color::White) }
+                      else               { Style::default().fg(Color::DarkGray) };
+            cells.push(Span::styled(cell, sty));
+        }
+        lines.push(Line::from(cells));
+    }
+
     let note_disp = steps.get(cursor).copied().flatten()
         .map(|n| note_name(n)).unwrap_or_else(|| "·".to_string());
     lines.push(Line::from(vec![
@@ -351,7 +445,6 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
         " Drum Machine "
     };
 
-    // Snapshot drum state under the lock, then release before rendering
     let (bpm, num_steps, current_step, playing, tracks) = {
         let s = app.synth.lock().unwrap();
         let dm = &s.drum_machine;
@@ -364,7 +457,6 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // ── Header ────────────────────────────────────────────────────────────
     let (status_str, status_color) =
         if playing { ("▶ PLAYING", Color::Green) } else { ("■ STOPPED", Color::DarkGray) };
     lines.push(Line::from(vec![
@@ -377,10 +469,8 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(status_str, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
     ]));
 
-    // ── Step number header ────────────────────────────────────────────────
-    // Label column: 14 chars to match track row label width
     {
-        let mut s = vec![Span::styled("              ", Style::default())]; // 14 spaces
+        let mut s = vec![Span::styled("              ", Style::default())];
         for i in 0..num_steps {
             let is_ph = playing && i == current_step;
             let label = if i % 4 == 0 { format!("{:>2}", i + 1) } else { " .".to_string() };
@@ -391,13 +481,11 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(s));
     }
 
-    // ── Track rows ────────────────────────────────────────────────────────
     for (ti, (kind, steps, muted, volume)) in tracks.iter().enumerate() {
         let is_selected = ti == sel_track;
         let track_color = drum_color(*kind);
         let vol_pct = (volume * 100.0).round() as u32;
 
-        // Mute indicator
         let mute_char  = if *muted { 'M' } else { '·' };
         let name_style = if is_selected && !muted {
             Style::default().fg(track_color).add_modifier(Modifier::BOLD)
@@ -408,19 +496,13 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
         } else {
             Style::default().fg(track_color)
         };
-        let mute_style = if *muted {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+        let mute_style = Style::default().fg(Color::DarkGray);
         let vol_style = if is_selected && focused {
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
 
-        // Label: " Name [·]VVV%│" = 14 chars
-        //  1 + 5 + 1 + 1 + 1 + 3 + 1 + 1 = 14
         let mut row: Vec<Span> = vec![
             Span::styled(format!(" {:5}", kind.name()), name_style),
             Span::styled("[", Style::default().fg(Color::DarkGray)),
@@ -430,7 +512,6 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("│", Style::default().fg(Color::DarkGray)),
         ];
 
-        // Step cells — 2 chars each, beat separator every 4
         for i in 0..num_steps {
             let active  = steps.get(i).copied().unwrap_or(false);
             let is_ph   = playing && i == current_step;
@@ -458,6 +539,145 @@ fn draw_drums(f: &mut Frame, area: Rect, app: &App) {
 
         lines.push(Line::from(row));
     }
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default().title(title).borders(Borders::ALL)
+                .border_style(if focused {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                })
+        ),
+        area,
+    );
+}
+
+// ── Effects panel ─────────────────────────────────────────────────────────────
+
+/// 8-character progress bar.
+fn pbar(v: f32, max: f32) -> String {
+    let pct    = (v / max).clamp(0.0, 1.0);
+    let filled = ((pct * 8.0).round() as usize).min(8);
+    format!("{}{}", "█".repeat(filled), "░".repeat(8 - filled))
+}
+
+/// 4-character progress bar for send levels (0.0–1.0).
+fn pbar4(v: f32) -> String {
+    let filled = ((v.clamp(0.0, 1.0) * 4.0).round() as usize).min(4);
+    format!("{}{}", "█".repeat(filled), "░".repeat(4 - filled))
+}
+
+fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
+    let focused = app.mode == AppMode::Effects;
+    let title = if focused {
+        " ► Effects — [↑↓] Select  [←→] Param  [-=] Adjust  [Space] On/Off or Route "
+    } else {
+        " Effects "
+    };
+
+    // Snapshot all effect params + routing in one lock acquisition
+    let (rev_en, rev_room, rev_damp, rev_mix,
+         dly_en, dly_time, dly_feed, dly_mix,
+         dst_en, dst_drv, dst_tone, dst_lvl,
+         s1_rev, s2_rev, dr_rev,
+         s1_dly, s2_dly, dr_dly,
+         s1_dst, s2_dst, dr_dst) = {
+        let s = app.synth.lock().unwrap();
+        (s.reverb.enabled, s.reverb.room_size, s.reverb.damping, s.reverb.mix,
+         s.delay.enabled,  s.delay.time_ms,    s.delay.feedback,  s.delay.mix,
+         s.distortion.enabled, s.distortion.drive, s.distortion.tone, s.distortion.level,
+         s.fx_routing.s1_reverb, s.fx_routing.s2_reverb, s.fx_routing.dr_reverb,
+         s.fx_routing.s1_delay,  s.fx_routing.s2_delay,  s.fx_routing.dr_delay,
+         s.fx_routing.s1_dist,   s.fx_routing.s2_dist,   s.fx_routing.dr_dist)
+    };
+
+    let sel = app.effects_sel;
+    let par = app.effects_param;
+
+    // Build one effect row (params 0-2 + routing sends 3-5)
+    let make_row = |fi: usize, enabled: bool, color: Color, name: &str,
+                    labels: &[&str; 3], vals: &[f32; 3], maxes: &[f32; 3], disps: &[String; 3],
+                    sends: &[f32; 3]| -> Line {
+        let is_sel = fi == sel;
+        let on_str   = if enabled { "[ON ] " } else { "[OFF] " };
+        let on_style = if enabled { Style::default().fg(Color::Green) }
+                       else       { Style::default().fg(Color::DarkGray) };
+        let name_sty = if is_sel && enabled {
+            Style::default().fg(color).add_modifier(Modifier::BOLD)
+        } else if is_sel {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+        } else if enabled {
+            Style::default().fg(color)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let mut spans: Vec<Span> = vec![
+            Span::styled(on_str, on_style),
+            Span::styled(name.to_string(), name_sty),
+            Span::raw("  "),
+        ];
+
+        // Params 0-2: effect-specific knobs
+        for pi in 0..3 {
+            let is_sp = is_sel && pi == par;
+            let bar   = pbar(vals[pi], maxes[pi]);
+            let sty   = if is_sp && focused {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else if !enabled {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            spans.push(Span::styled(
+                format!("{}: [{}] {:>5}  ", labels[pi], bar, disps[pi]),
+                sty,
+            ));
+        }
+
+        // Params 3-5: routing send levels (S1, S2, DR)
+        for (ri, (&send, rlbl)) in sends.iter().zip(["S1","S2","DR"].iter()).enumerate() {
+            let pi = ri + 3;
+            let is_sp = is_sel && pi == par;
+            let pct = (send * 100.0).round() as u32;
+            let sty = if is_sp && focused {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else if send > 0.0 && enabled {
+                Style::default().fg(Color::Gray)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            spans.push(Span::styled(
+                format!("{}:[{}]{:>3}%  ", rlbl, pbar4(send), pct),
+                sty,
+            ));
+        }
+
+        Line::from(spans)
+    };
+
+    let rev_d = [format!("{:.0}%",  rev_room * 100.0),
+                 format!("{:.0}%",  rev_damp * 100.0),
+                 format!("{:.0}%",  rev_mix  * 100.0)];
+    let dly_d = [format!("{:.0}ms", dly_time),
+                 format!("{:.0}%",  dly_feed * 100.0),
+                 format!("{:.0}%",  dly_mix  * 100.0)];
+    let dst_d = [format!("{:.1}x",  dst_drv),
+                 format!("{:.0}%",  dst_tone * 100.0),
+                 format!("{:.0}%",  dst_lvl  * 100.0)];
+
+    let lines = vec![
+        make_row(0, rev_en, Color::Blue,  "REVERB ", &["Room","Damp","Mix "],
+                 &[rev_room, rev_damp, rev_mix], &[1.0, 1.0, 1.0], &rev_d,
+                 &[s1_rev, s2_rev, dr_rev]),
+        make_row(1, dly_en, Color::Green, "DELAY  ", &["Time","Feed","Mix "],
+                 &[dly_time, dly_feed, dly_mix], &[1000.0, 0.95, 1.0], &dly_d,
+                 &[s1_dly, s2_dly, dr_dly]),
+        make_row(2, dst_en, Color::Red,   "DISTORT", &["Drv ","Tone","Lvl "],
+                 &[dst_drv,  dst_tone, dst_lvl],  &[10.0,  1.0,  1.0], &dst_d,
+                 &[s1_dst, s2_dst, dr_dst]),
+    ];
 
     f.render_widget(
         Paragraph::new(lines).block(
@@ -515,7 +735,6 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
     let w = Style::default().fg(Color::White);
     let d = Style::default().fg(Color::DarkGray);
 
-    // Global line shown in all focus modes
     let global = Line::from(vec![
         Span::styled("[Tab/F2] ", w), Span::raw("Cycle focus  │  "),
         Span::styled("[F1] ",     w), Span::raw("Waveform  │  "),
@@ -524,7 +743,6 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         Span::styled("[Esc] ",    w), Span::raw("Quit"),
     ]);
 
-    // Focus-specific line
     let focus_line = match app.mode {
         AppMode::Play => Line::from(vec![
             Span::styled("Keys: ", d),
@@ -536,6 +754,14 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("[Space] ", w), Span::raw("Play/Pause  │  "),
             Span::styled("[Del] ",   w), Span::raw("Clear  │  "),
             Span::styled("[]] ",     w), Span::raw("Cycle steps"),
+        ]),
+        AppMode::SynthSeq2 => Line::from(vec![
+            Span::styled("Piano keys: ", d),
+            Span::raw("set note at cursor (advances)  │  "),
+            Span::styled("[Space] ", w), Span::raw("Play/Pause  │  "),
+            Span::styled("[Del] ",   w), Span::raw("Clear  │  "),
+            Span::styled("[]] ",     w), Span::raw("Cycle steps  │  "),
+            Span::styled("[F5] ",    w), Span::raw("Wave"),
         ]),
         AppMode::Drums => Line::from(vec![
             Span::styled("Preview: ", d),
@@ -550,6 +776,13 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("[Enter] ", w), Span::raw("Play  │  "),
             Span::styled("[\\ ] ", w),  Span::raw("Mute  │  "),
             Span::styled("[Del] ",  w), Span::raw("Clear"),
+        ]),
+        AppMode::Effects => Line::from(vec![
+            Span::styled("[↑↓] ", w), Span::raw("Select effect  │  "),
+            Span::styled("[←→] ", w), Span::raw("Select param (col 1-3) or send (col 4-6)  │  "),
+            Span::styled("[-=] ", w), Span::raw("Adjust  │  "),
+            Span::styled("[Space] ", w), Span::raw("On/Off  │  "),
+            Span::styled("[Space col 4-6] ", w), Span::raw("Route S1/S2/DR"),
         ]),
     };
 

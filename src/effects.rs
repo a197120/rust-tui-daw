@@ -49,3 +49,175 @@ impl Default for EffectChain {
         Self::new()
     }
 }
+
+// ── Freeverb helpers (private) ────────────────────────────────────────────────
+
+struct CombFilter {
+    buf: Vec<f32>,
+    pos: usize,
+    feedback: f32,
+    damp_store: f32,
+    damp1: f32,
+    damp2: f32,
+}
+
+impl CombFilter {
+    fn new(size: usize) -> Self {
+        Self { buf: vec![0.0; size], pos: 0, feedback: 0.84,
+               damp_store: 0.0, damp1: 0.2, damp2: 0.8 }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32) -> f32 {
+        let output = self.buf[self.pos];
+        self.damp_store = output * self.damp2 + self.damp_store * self.damp1;
+        self.buf[self.pos] = input + self.damp_store * self.feedback;
+        self.pos = (self.pos + 1) % self.buf.len();
+        output
+    }
+
+    fn set_feedback(&mut self, v: f32) { self.feedback = v; }
+    fn set_damp(&mut self, v: f32) { self.damp1 = v; self.damp2 = 1.0 - v; }
+}
+
+struct AllpassFilter {
+    buf: Vec<f32>,
+    pos: usize,
+}
+
+impl AllpassFilter {
+    fn new(size: usize) -> Self {
+        Self { buf: vec![0.0; size], pos: 0 }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32) -> f32 {
+        let bufout = self.buf[self.pos];
+        let output = -input + bufout;
+        self.buf[self.pos] = input + bufout * 0.5;
+        self.pos = (self.pos + 1) % self.buf.len();
+        output
+    }
+}
+
+// ── Reverb (Freeverb: 8 comb + 4 allpass, tuned for 44100 Hz) ────────────────
+
+pub struct Reverb {
+    pub enabled:   bool,
+    pub room_size: f32,  // 0.0–1.0  (comb feedback = room_size*0.28+0.7)
+    pub damping:   f32,  // 0.0–1.0  (comb damp = damping*0.4)
+    pub mix:       f32,  // 0.0–1.0  wet/dry
+    combs:    [CombFilter; 8],
+    allpasses: [AllpassFilter; 4],
+}
+
+impl Reverb {
+    pub fn new() -> Self {
+        let mut r = Self {
+            enabled: false, room_size: 0.5, damping: 0.5, mix: 0.3,
+            combs: [
+                CombFilter::new(1116), CombFilter::new(1188),
+                CombFilter::new(1277), CombFilter::new(1356),
+                CombFilter::new(1422), CombFilter::new(1491),
+                CombFilter::new(1557), CombFilter::new(1617),
+            ],
+            allpasses: [
+                AllpassFilter::new(556), AllpassFilter::new(441),
+                AllpassFilter::new(341), AllpassFilter::new(225),
+            ],
+        };
+        let fb = r.room_size * 0.28 + 0.7;
+        let dp = r.damping * 0.4;
+        for c in &mut r.combs { c.set_feedback(fb); c.set_damp(dp); }
+        r
+    }
+}
+
+impl AudioEffect for Reverb {
+    fn process(&mut self, sample: f32) -> f32 {
+        if !self.enabled { return 0.0; }
+        let fb = self.room_size * 0.28 + 0.7;
+        let dp = self.damping * 0.4;
+        for c in &mut self.combs { c.set_feedback(fb); c.set_damp(dp); }
+        let input = sample * 0.015;
+        let mut wet = 0.0f32;
+        for c in &mut self.combs { wet += c.process(input); }
+        for ap in &mut self.allpasses { wet = ap.process(wet); }
+        wet * self.mix * 3.0
+    }
+
+    fn name(&self) -> &'static str { "Reverb" }
+
+    fn reset(&mut self) {
+        for c in &mut self.combs { c.buf.fill(0.0); c.pos = 0; c.damp_store = 0.0; }
+        for ap in &mut self.allpasses { ap.buf.fill(0.0); ap.pos = 0; }
+    }
+}
+
+// ── Delay (ring-buffer echo) ──────────────────────────────────────────────────
+
+pub struct Delay {
+    pub enabled:  bool,
+    pub time_ms:  f32,   // 10–1000 ms
+    pub feedback: f32,   // 0.0–0.95
+    pub mix:      f32,   // 0.0–1.0
+    buf:         Vec<f32>,
+    write:       usize,
+    sample_rate: f32,
+}
+
+impl Delay {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            enabled: false, time_ms: 250.0, feedback: 0.4, mix: 0.3,
+            buf: vec![0.0; sample_rate as usize],
+            write: 0, sample_rate,
+        }
+    }
+}
+
+impl AudioEffect for Delay {
+    fn process(&mut self, sample: f32) -> f32 {
+        if !self.enabled { return 0.0; }
+        let delay_samp = ((self.time_ms / 1000.0 * self.sample_rate) as usize)
+            .clamp(1, self.buf.len() - 1);
+        let read = (self.write + self.buf.len() - delay_samp) % self.buf.len();
+        let delayed = self.buf[read];
+        self.buf[self.write] = sample + delayed * self.feedback;
+        self.write = (self.write + 1) % self.buf.len();
+        delayed * self.mix
+    }
+
+    fn name(&self) -> &'static str { "Delay" }
+
+    fn reset(&mut self) { self.buf.fill(0.0); self.write = 0; }
+}
+
+// ── Distortion (waveshaper) ───────────────────────────────────────────────────
+
+pub struct Distortion {
+    pub enabled: bool,
+    pub drive:   f32,   // 1.0–10.0  gain before clipping
+    pub tone:    f32,   // 0.0–1.0   blend: 0=soft tanh, 1=hard clip
+    pub level:   f32,   // 0.0–1.0   output level
+}
+
+impl Distortion {
+    pub fn new() -> Self {
+        Self { enabled: false, drive: 3.0, tone: 0.3, level: 0.7 }
+    }
+}
+
+impl AudioEffect for Distortion {
+    fn process(&mut self, sample: f32) -> f32 {
+        if !self.enabled { return 0.0; }
+        let driven = sample * self.drive;
+        let soft   = driven.tanh();
+        let hard   = driven.clamp(-1.0, 1.0);
+        (soft * (1.0 - self.tone) + hard * self.tone) * self.level
+    }
+
+    fn name(&self) -> &'static str { "Distortion" }
+
+    fn reset(&mut self) {}
+}

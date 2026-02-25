@@ -231,8 +231,7 @@ pub struct DrumMachine {
     /// Master insert effects applied to the summed drum bus output.
     pub fx: EffectChain,
 
-    sample_rate:    f32,
-    sample_counter: u64,
+    sample_rate: f32,
     /// Polyphonic voice pool — all currently sounding drum hits.
     voices: Vec<DrumVoice>,
     /// Seed advanced before each trigger so every hit has a distinct noise flavour.
@@ -250,7 +249,6 @@ impl DrumMachine {
             playing: false,
             fx: EffectChain::new(),
             sample_rate,
-            sample_counter: 0,
             voices: Vec::with_capacity(32),
             seed: 0xBEEF_CAFE,
         }
@@ -261,18 +259,17 @@ impl DrumMachine {
     }
 
     /// Generate the next audio sample.  Called once per sample from the audio
-    /// thread inside `Synth::generate_sample`.
-    pub fn generate_sample(&mut self, bpm: f32) -> f32 {
+    /// thread inside `Synth::generate_sample`, using the shared master clock.
+    pub fn generate_sample(&mut self, bpm: f32, clock: u64) -> f32 {
         let sps = self.samples_per_step(bpm).max(1);
-        let old  = self.sample_counter;
-        self.sample_counter += 1;
+        let step_idx = (clock / sps) as usize % self.num_steps;
+        let phase_in = clock % sps;
 
-        if self.playing && old == 0 {
+        if self.playing && phase_in == 0 {
+            self.current_step = step_idx;
             self.fire_step();
-        }
-        if self.playing && self.sample_counter >= sps {
-            self.sample_counter  = 0;
-            self.current_step = (self.current_step + 1) % self.num_steps;
+        } else {
+            self.current_step = step_idx;
         }
 
         // Mix all active drum voices, apply per-track fx, then sum
@@ -328,7 +325,6 @@ impl DrumMachine {
         self.playing = !self.playing;
         if !self.playing {
             self.voices.clear();
-            self.sample_counter = 0;
         }
     }
 

@@ -83,6 +83,14 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                             KeyCode::PageUp   => app.bpm_up(),
                             KeyCode::PageDown => app.bpm_down(),
 
+                            // Effects focus: navigation + param adjust (no Space repeat)
+                            KeyCode::Up    if app.mode == AppMode::Effects => app.effects_sel_up(),
+                            KeyCode::Down  if app.mode == AppMode::Effects => app.effects_sel_down(),
+                            KeyCode::Left  if app.mode == AppMode::Effects => app.effects_param_left(),
+                            KeyCode::Right if app.mode == AppMode::Effects => app.effects_param_right(),
+                            KeyCode::Char('=') if app.mode == AppMode::Effects => app.effects_param_inc(),
+                            KeyCode::Char('-') if app.mode == AppMode::Effects => app.effects_param_dec(),
+
                             // Drums focus: navigation + drum vol repeat
                             KeyCode::Up    if app.mode == AppMode::Drums => app.drum_track_up(),
                             KeyCode::Down  if app.mode == AppMode::Drums => app.drum_track_down(),
@@ -90,6 +98,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                             KeyCode::Right if app.mode == AppMode::Drums => app.drum_step_right(),
                             KeyCode::Char('=') if app.mode == AppMode::Drums => app.drum_vol_up(),
                             KeyCode::Char('-') if app.mode == AppMode::Drums => app.drum_vol_down(),
+
+                            // SynthSeq2 focus: cursor + BPM
+                            KeyCode::Left  if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_left(),
+                            KeyCode::Right if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_right(),
+                            KeyCode::Up    if app.mode == AppMode::SynthSeq2 => app.bpm_up(),
+                            KeyCode::Down  if app.mode == AppMode::SynthSeq2 => app.bpm_down(),
 
                             // SynthSeq focus: cursor + BPM
                             KeyCode::Left  if app.mode == AppMode::SynthSeq => app.seq_cursor_left(),
@@ -126,6 +140,15 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::PageUp       => app.bpm_up(),
                         KeyCode::PageDown     => app.bpm_down(),
 
+                        // ── Effects focus ─────────────────────────────────
+                        KeyCode::Up    if app.mode == AppMode::Effects => app.effects_sel_up(),
+                        KeyCode::Down  if app.mode == AppMode::Effects => app.effects_sel_down(),
+                        KeyCode::Left  if app.mode == AppMode::Effects => app.effects_param_left(),
+                        KeyCode::Right if app.mode == AppMode::Effects => app.effects_param_right(),
+                        KeyCode::Char('=') if app.mode == AppMode::Effects => app.effects_param_inc(),
+                        KeyCode::Char('-') if app.mode == AppMode::Effects => app.effects_param_dec(),
+                        KeyCode::Char(' ') if app.mode == AppMode::Effects => app.effects_toggle(),
+
                         // ── Drums focus ───────────────────────────────────
                         KeyCode::Up    if app.mode == AppMode::Drums => app.drum_track_up(),
                         KeyCode::Down  if app.mode == AppMode::Drums => app.drum_track_down(),
@@ -138,6 +161,16 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Char('\\') if app.mode == AppMode::Drums => app.drum_toggle_mute(),
                         KeyCode::Char('=')  if app.mode == AppMode::Drums => app.drum_vol_up(),
                         KeyCode::Char('-')  if app.mode == AppMode::Drums => app.drum_vol_down(),
+
+                        // ── SynthSeq2 focus ───────────────────────────────
+                        KeyCode::Left  if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_left(),
+                        KeyCode::Right if app.mode == AppMode::SynthSeq2 => app.seq2_cursor_right(),
+                        KeyCode::Up    if app.mode == AppMode::SynthSeq2 => app.bpm_up(),
+                        KeyCode::Down  if app.mode == AppMode::SynthSeq2 => app.bpm_down(),
+                        KeyCode::Char(' ') if app.mode == AppMode::SynthSeq2 => app.seq2_toggle_play(),
+                        KeyCode::Backspace | KeyCode::Delete if app.mode == AppMode::SynthSeq2 => app.seq2_clear_step(),
+                        KeyCode::Char(']') if app.mode == AppMode::SynthSeq2 => app.seq2_cycle_steps(),
+                        KeyCode::F(5)      if app.mode == AppMode::SynthSeq2 => app.cycle_wave2(),
 
                         // ── SynthSeq focus ────────────────────────────────
                         KeyCode::Left  if app.mode == AppMode::SynthSeq => app.seq_cursor_left(),
@@ -154,13 +187,15 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         KeyCode::Up    => app.volume_up(),
                         KeyCode::Down  => app.volume_down(),
 
-                        // ── Piano / drum preview keys ─────────────────────
+                        // ── Piano / drum preview / sequencer note keys ────
                         KeyCode::Char(c) => match app.mode {
-                            AppMode::Play => {
+                            AppMode::Play      => {
                                 if enhanced { app.key_press(c); } else { app.key_press_fallback(c); }
                             }
-                            AppMode::SynthSeq => app.seq_set_note(c),
-                            AppMode::Drums    => app.drum_preview(c),
+                            AppMode::SynthSeq  => app.seq_set_note(c),
+                            AppMode::SynthSeq2 => app.seq2_set_note(c),
+                            AppMode::Drums     => app.drum_preview(c),
+                            AppMode::Effects   => {}
                         },
 
                         _ => {}
