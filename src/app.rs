@@ -492,11 +492,11 @@ impl App {
     // ── Effects controls ──────────────────────────────────────────────────
 
     pub fn effects_sel_up(&mut self) {
-        self.effects_sel = if self.effects_sel == 0 { 3 } else { self.effects_sel - 1 };
+        self.effects_sel = if self.effects_sel == 0 { 5 } else { self.effects_sel - 1 };
     }
 
     pub fn effects_sel_down(&mut self) {
-        self.effects_sel = (self.effects_sel + 1) % 4;
+        self.effects_sel = (self.effects_sel + 1) % 6;
     }
 
     /// Left/right cycles through params 0–5 (0-2=effect params, 3-5=send levels).
@@ -522,6 +522,12 @@ impl App {
                        format!("Distortion: {}", if s.distortion.enabled { "ON" } else { "OFF" }) }
                 3 => { s.sidechain.enabled = !s.sidechain.enabled;
                        format!("Sidechain: {}", if s.sidechain.enabled { "ON" } else { "OFF" }) }
+                4 => { s.filter1.enabled = !s.filter1.enabled;
+                       if s.filter1.enabled { s.filter1.reset_state(); }
+                       format!("S1 Filter: {}", if s.filter1.enabled { "ON" } else { "OFF" }) }
+                5 => { s.filter2.enabled = !s.filter2.enabled;
+                       if s.filter2.enabled { s.filter2.reset_state(); }
+                       format!("S2 Filter: {}", if s.filter2.enabled { "ON" } else { "OFF" }) }
                 _ => String::new()
             }
         };
@@ -533,7 +539,7 @@ impl App {
         let sel = self.effects_sel;
         let par = self.effects_param;
 
-        if par < 3 { return; }
+        if par < 3 || sel >= 4 { return; }
 
         let ri = par - 3;
         let msg = {
@@ -561,6 +567,7 @@ impl App {
         let (sel, param) = (self.effects_sel, self.effects_param);
 
         if param >= 3 {
+            if sel >= 4 { return; } // Filter rows have no routing sends
             let ri = param - 3;
             let msg = {
                 let mut s = self.synth.lock().unwrap();
@@ -614,6 +621,22 @@ impl App {
                                format!("SC Release: {:.0}ms", s.sidechain.release_ms) }
                         _ => String::new()
                     },
+                    4 => match param {
+                        0 => { s.filter1.mode = s.filter1.mode.next();
+                               format!("S1 Filter: {}", s.filter1.mode.name()) }
+                        1 => { s.filter1.cutoff = (s.filter1.cutoff * 1.0595).clamp(80.0, 18000.0);
+                               format!("S1 Cutoff: {:.0}Hz", s.filter1.cutoff) }
+                        _ => { s.filter1.q = (s.filter1.q + 0.1).clamp(0.5, 10.0);
+                               format!("S1 Q: {:.1}", s.filter1.q) }
+                    },
+                    5 => match param {
+                        0 => { s.filter2.mode = s.filter2.mode.next();
+                               format!("S2 Filter: {}", s.filter2.mode.name()) }
+                        1 => { s.filter2.cutoff = (s.filter2.cutoff * 1.0595).clamp(80.0, 18000.0);
+                               format!("S2 Cutoff: {:.0}Hz", s.filter2.cutoff) }
+                        _ => { s.filter2.q = (s.filter2.q + 0.1).clamp(0.5, 10.0);
+                               format!("S2 Q: {:.1}", s.filter2.q) }
+                    },
                     _ => String::new(),
                 }
             };
@@ -625,6 +648,7 @@ impl App {
         let (sel, param) = (self.effects_sel, self.effects_param);
 
         if param >= 3 {
+            if sel >= 4 { return; } // Filter rows have no routing sends
             let ri = param - 3;
             let msg = {
                 let mut s = self.synth.lock().unwrap();
@@ -678,6 +702,22 @@ impl App {
                                format!("SC Release: {:.0}ms", s.sidechain.release_ms) }
                         _ => String::new()
                     },
+                    4 => match param {
+                        0 => { s.filter1.mode = s.filter1.mode.prev();
+                               format!("S1 Filter: {}", s.filter1.mode.name()) }
+                        1 => { s.filter1.cutoff = (s.filter1.cutoff / 1.0595).clamp(80.0, 18000.0);
+                               format!("S1 Cutoff: {:.0}Hz", s.filter1.cutoff) }
+                        _ => { s.filter1.q = (s.filter1.q - 0.1).clamp(0.5, 10.0);
+                               format!("S1 Q: {:.1}", s.filter1.q) }
+                    },
+                    5 => match param {
+                        0 => { s.filter2.mode = s.filter2.mode.prev();
+                               format!("S2 Filter: {}", s.filter2.mode.name()) }
+                        1 => { s.filter2.cutoff = (s.filter2.cutoff / 1.0595).clamp(80.0, 18000.0);
+                               format!("S2 Cutoff: {:.0}Hz", s.filter2.cutoff) }
+                        _ => { s.filter2.q = (s.filter2.q - 0.1).clamp(0.5, 10.0);
+                               format!("S2 Q: {:.1}", s.filter2.q) }
+                    },
                     _ => String::new(),
                 }
             };
@@ -693,6 +733,8 @@ impl App {
         if s.delay.enabled      { ind.push_str("  ▶DLY"); }
         if s.distortion.enabled { ind.push_str("  ▶DST"); }
         if s.sidechain.enabled  { ind.push_str("  ▶SC"); }
+        if s.filter1.enabled    { ind.push_str("  ▶F1"); }
+        if s.filter2.enabled    { ind.push_str("  ▶F2"); }
         ind
     }
 }

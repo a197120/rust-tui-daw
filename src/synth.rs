@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 
 use crate::drums::DrumMachine;
-use crate::effects::{AudioEffect, Delay, Distortion, EffectChain, Reverb};
+use crate::effects::{AudioEffect, BiquadFilter, Delay, Distortion, EffectChain, Reverb};
 use crate::sequencer::Sequencer;
 
 // ── Waveform ──────────────────────────────────────────────────────────────────
@@ -164,6 +164,10 @@ pub struct Synth {
     // ── Drum machine ──────────────────────────────────────────────────────
     pub drum_machine: DrumMachine,
 
+    // ── Per-bus filters (applied before EffectChain on each bus) ─────────
+    pub filter1: BiquadFilter,
+    pub filter2: BiquadFilter,
+
     // ── Master effects (parallel aux-send, wet-only output) ───────────────
     pub reverb:     Reverb,
     pub delay:      Delay,
@@ -202,6 +206,9 @@ impl Synth {
             fx2:          EffectChain::new(),
 
             drum_machine: DrumMachine::new(sample_rate),
+
+            filter1: BiquadFilter::new(sample_rate),
+            filter2: BiquadFilter::new(sample_rate),
 
             reverb:      Reverb::new(),
             delay:       Delay::new(sample_rate),
@@ -270,7 +277,9 @@ impl Synth {
         let mut mel1 = 0.0f32;
         for v in self.voices.values_mut() { mel1 += v.next_sample(sr, wave, a, d, s, r); }
         self.voices.retain(|_, v| !v.is_finished());
-        let mel1_out = self.fx.process(mel1 * self.volume / (self.voices.len().max(1) as f32).sqrt());
+        let mel1_scaled   = mel1 * self.volume / (self.voices.len().max(1) as f32).sqrt();
+        let mel1_filtered = self.filter1.process(mel1_scaled);
+        let mel1_out      = self.fx.process(mel1_filtered);
 
         // ── Melodic bus 2 ─────────────────────────────────────────────────
         let wave2 = self.wave_type2;
@@ -278,7 +287,9 @@ impl Synth {
         let mut mel2 = 0.0f32;
         for v in self.voices2.values_mut() { mel2 += v.next_sample(sr, wave2, a2, d2, s2, r2); }
         self.voices2.retain(|_, v| !v.is_finished());
-        let mel2_out = self.fx2.process(mel2 * self.volume2 / (self.voices2.len().max(1) as f32).sqrt());
+        let mel2_scaled   = mel2 * self.volume2 / (self.voices2.len().max(1) as f32).sqrt();
+        let mel2_filtered = self.filter2.process(mel2_scaled);
+        let mel2_out      = self.fx2.process(mel2_filtered);
 
         // ── Drum bus ──────────────────────────────────────────────────────
         let drum_out = self.drum_machine.generate_sample(self.bpm, clock) * self.volume;

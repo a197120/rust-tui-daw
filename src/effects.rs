@@ -1,3 +1,5 @@
+use std::f32::consts::PI;
+
 /// Mono audio effect: one sample in, one sample out.
 #[allow(dead_code)]
 ///
@@ -220,4 +222,93 @@ impl AudioEffect for Distortion {
     fn name(&self) -> &'static str { "Distortion" }
 
     fn reset(&mut self) {}
+}
+
+// ── Biquad filter (RBJ Audio EQ Cookbook) ────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FilterMode { LowPass, HighPass, BandPass }
+
+impl FilterMode {
+    pub fn name(self) -> &'static str {
+        match self { Self::LowPass => "LP", Self::HighPass => "HP", Self::BandPass => "BP" }
+    }
+    pub fn next(self) -> Self {
+        match self { Self::LowPass => Self::HighPass, Self::HighPass => Self::BandPass, Self::BandPass => Self::LowPass }
+    }
+    pub fn prev(self) -> Self {
+        match self { Self::LowPass => Self::BandPass, Self::HighPass => Self::LowPass, Self::BandPass => Self::HighPass }
+    }
+}
+
+/// Two-pole biquad filter applied directly to a synth bus (not via EffectChain).
+/// When disabled, passes signal through unchanged at zero cost.
+pub struct BiquadFilter {
+    pub enabled: bool,
+    pub mode:    FilterMode,
+    pub cutoff:  f32,   // Hz, 80.0–18 000.0
+    pub q:       f32,   // 0.5–10.0
+    sample_rate: f32,
+    // Cached normalised coefficients
+    b0: f32, b1: f32, b2: f32, a1: f32, a2: f32,
+    // Direct Form I delay state
+    x1: f32, x2: f32, y1: f32, y2: f32,
+    // Track last computed params to detect when a recompute is needed
+    last_cutoff: f32, last_q: f32, last_mode: FilterMode,
+}
+
+impl BiquadFilter {
+    pub fn new(sample_rate: f32) -> Self {
+        let mut f = Self {
+            enabled: false,
+            mode: FilterMode::LowPass,
+            cutoff: 5000.0,
+            q: 0.707,
+            sample_rate,
+            b0: 0.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0,
+            x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0,
+            last_cutoff: -1.0, last_q: -1.0, last_mode: FilterMode::LowPass,
+        };
+        f.recompute();
+        f
+    }
+
+    /// Reset delay state (call when toggling on to avoid a transient pop).
+    pub fn reset_state(&mut self) {
+        self.x1 = 0.0; self.x2 = 0.0; self.y1 = 0.0; self.y2 = 0.0;
+    }
+
+    fn recompute(&mut self) {
+        let w0    = 2.0 * PI * self.cutoff.min(self.sample_rate * 0.499) / self.sample_rate;
+        let cos_w = w0.cos();
+        let sin_w = w0.sin();
+        let alpha = sin_w / (2.0 * self.q);
+
+        let (b0, b1, b2) = match self.mode {
+            FilterMode::LowPass  => { let h = (1.0 - cos_w) / 2.0; (h, 1.0 - cos_w, h) }
+            FilterMode::HighPass => { let h = (1.0 + cos_w) / 2.0; (h, -(1.0 + cos_w), h) }
+            FilterMode::BandPass => { let h = sin_w / 2.0; (h, 0.0, -h) }
+        };
+        let a0 = 1.0 + alpha;
+        self.b0 = b0 / a0;  self.b1 = b1 / a0;  self.b2 = b2 / a0;
+        self.a1 = -2.0 * cos_w / a0;
+        self.a2 = (1.0 - alpha) / a0;
+
+        self.last_cutoff = self.cutoff;
+        self.last_q      = self.q;
+        self.last_mode   = self.mode;
+    }
+
+    #[inline]
+    pub fn process(&mut self, x: f32) -> f32 {
+        if !self.enabled { return x; }
+        if self.cutoff != self.last_cutoff || self.q != self.last_q || self.mode != self.last_mode {
+            self.recompute();
+        }
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
+                             - self.a1 * self.y1 - self.a2 * self.y2;
+        self.x2 = self.x1;  self.x1 = x;
+        self.y2 = self.y1;  self.y1 = y;
+        y
+    }
 }

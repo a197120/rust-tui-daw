@@ -19,7 +19,7 @@ No tests exist yet. Build with `cargo build`, run with `cargo run`.
 | `synth.rs` | Melodic polyphonic voices, ADSR, waveforms, master mix |
 | `sequencer.rs` | Melodic step sequencer (sample-accurate) |
 | `drums.rs` | 8-track drum machine with synthesized voices |
-| `effects.rs` | `AudioEffect` trait + `EffectChain` (effects scaffold) |
+| `effects.rs` | `AudioEffect` trait + `EffectChain`; also `BiquadFilter` + `FilterMode` |
 | `ui.rs` | All Ratatui rendering; one function per panel |
 
 ## Architecture
@@ -33,7 +33,8 @@ No tests exist yet. Build with `cargo build`, run with `cargo run`.
 CPAL callback
   └─ Synth::generate_sample()
        ├─ Sequencer::tick(bpm)          → note_on/note_off into voices
-       ├─ melodic voice pool mix        → Synth::fx (EffectChain, empty)
+       ├─ melodic bus 1: voice mix → BiquadFilter (filter1) → EffectChain (fx)
+       ├─ melodic bus 2: voice mix → BiquadFilter (filter2) → EffectChain (fx2)
        ├─ DrumMachine::generate_sample(bpm)
        │    ├─ fire_step() → DrumVoice pool (polyphonic)
        │    └─ DrumMachine::fx (EffectChain, empty)
@@ -51,6 +52,8 @@ Arc<Mutex<Synth>>
   ├─ volume: f32           ← master volume (applied to both buses)
   ├─ voices: HashMap<u8,Voice>
   ├─ sequencer: Sequencer
+  ├─ filter1: BiquadFilter ← per-bus filter for S1 (before EffectChain)
+  ├─ filter2: BiquadFilter ← per-bus filter for S2 (before EffectChain)
   ├─ drum_machine: DrumMachine
   └─ fx: EffectChain       ← melodic bus effects (empty)
 ```
@@ -68,7 +71,7 @@ Keyboard panel (12)   — piano + note highlights
 Synth Seq panel (8)   — step grid (up to 32 steps)
 Synth Seq 2 panel (8) — second melodic sequencer
 Drum Machine (12)     — 8 track rows with volume
-Effects panel (6)     — reverb, delay, distortion, sidechain + routing
+Effects panel (8)     — reverb, delay, distortion, sidechain, filter S1/S2 + routing
 Status (4)            — wave, BPM, master vol, active notes
 Scope (6)             — braille oscilloscope
 Help (remaining)      — context-sensitive key hints
@@ -148,7 +151,9 @@ All drum sounds are synthesized with XOR-shift noise and phase-accumulated oscil
 | Clap | 3 staggered noise bursts (0/9/17 ms) + decaying body |
 | Toms | Sine pitch sweep + noise; different freq/decay per tom |
 
-## Effects scaffold (`effects.rs`)
+## Effects (`effects.rs`)
+
+### EffectChain / AudioEffect trait
 
 ```rust
 pub trait AudioEffect: Send {
@@ -163,6 +168,43 @@ pub struct EffectChain { pub effects: Vec<Box<dyn AudioEffect>> }
 `EffectChain::process()` short-circuits to a direct return when empty (zero overhead).
 Every instrument bus (`Synth::fx`, `DrumMachine::fx`) and every track (`DrumTrack::fx`)
 already owns an `EffectChain`. To add an effect, implement the trait and push an instance.
+
+### BiquadFilter
+
+Two-pole biquad filter (RBJ Audio EQ Cookbook). **Not** part of `EffectChain` — applied
+directly on each melodic bus before the chain, so it sits between the voice mix and any
+send effects.
+
+```rust
+pub struct BiquadFilter {
+    pub enabled: bool,
+    pub mode:    FilterMode,   // LowPass / HighPass / BandPass
+    pub cutoff:  f32,          // Hz, 80–18 000
+    pub q:       f32,          // 0.5–10.0
+    // internal: cached coefficients, Direct Form I state
+}
+```
+
+- `FilterMode::next()` / `prev()` cycle LP→HP→BP.
+- Coefficients are cached and only recomputed when `cutoff`, `q`, or `mode` changes.
+- `reset_state()` clears the delay elements; called automatically when toggling ON to
+  prevent pops.
+- `process()` returns the input sample unchanged when `enabled = false` (zero cost).
+
+**Signal path per bus:**
+```
+voice mix (polyphony-normalised) → BiquadFilter → EffectChain → FX sends
+```
+
+**Controls (Effects panel, rows 5–6):**
+
+| Param col | Action |
+|-----------|--------|
+| 0 (Type)   | `=` / `-` cycle LP / HP / BP |
+| 1 (Cutoff) | `=` / `-` ×÷ 1.0595 (one semitone); holds down for smooth sweep |
+| 2 (Q)      | `=` / `-` ±0.1 |
+
+`[Enter]` toggles on/off. Rows 5–6 have no routing sends (filter is a bus insert, not a parallel send). Active filters show `▶F1` / `▶F2` in the title bar.
 
 ## Melodic sequencer (`sequencer.rs`)
 
@@ -195,8 +237,11 @@ Playhead = green bg, cursor = yellow bg, playhead+cursor = cyan bg.
 
 ## Key things to know for future work
 
-- **Adding a new effect**: implement `AudioEffect`, push onto the relevant `EffectChain`.
+- **Adding a new send effect**: implement `AudioEffect`, push onto the relevant `EffectChain`.
   No other changes needed — the chain is already wired into every bus/track.
+- **Adding a filter to the drum bus**: add a `BiquadFilter` field to `DrumMachine` and apply
+  it in `generate_sample()` before `self.fx.process()`. Same pattern as `filter1`/`filter2`
+  on `Synth`. Expose it in the Effects panel as a new row (extend `effects_sel` to 7).
 - **Adding a new drum sound**: add variant to `DrumKind::ALL`, implement a synthesis
   function in `DrumVoice`, add a `DrumTrack` in `DrumMachine::new()`.
 - **Adding a new waveform**: extend `WaveType` enum in `synth.rs`.

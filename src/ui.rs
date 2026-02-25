@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 use crate::app::{App, AppMode};
 use crate::drums::DrumKind;
+use crate::effects::FilterMode;
 use crate::synth::note_name;
 
 // ── Top-level routing ─────────────────────────────────────────────────────────
@@ -25,7 +26,7 @@ pub fn draw(f: &mut Frame, app: &App, enhanced: bool) {
             Constraint::Length(8),  // synth seq 1     chunks[2]
             Constraint::Length(8),  // synth seq 2     chunks[3]
             Constraint::Length(12), // drum machine    chunks[4]
-            Constraint::Length(6),  // effects         chunks[5]
+            Constraint::Length(8),  // effects         chunks[5]
             Constraint::Length(4),  // status          chunks[6]
             Constraint::Length(6),  // scope           chunks[7]
             Constraint::Min(0),     // help            chunks[8]
@@ -639,7 +640,9 @@ fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
          s1_rev, s2_rev, dr_rev,
          s1_dly, s2_dly, dr_dly,
          s1_dst, s2_dst, dr_dst,
-         sc_en, sc_depth, sc_rel, sc_s1, sc_s2) = {
+         sc_en, sc_depth, sc_rel, sc_s1, sc_s2,
+         f1_en, f1_mode, f1_cut, f1_q,
+         f2_en, f2_mode, f2_cut, f2_q) = {
         let s = app.synth.lock().unwrap();
         (s.reverb.enabled, s.reverb.room_size, s.reverb.damping, s.reverb.mix,
          s.delay.enabled,  s.delay.time_ms,    s.delay.feedback,  s.delay.mix,
@@ -648,7 +651,9 @@ fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
          s.fx_routing.s1_delay,  s.fx_routing.s2_delay,  s.fx_routing.dr_delay,
          s.fx_routing.s1_dist,   s.fx_routing.s2_dist,   s.fx_routing.dr_dist,
          s.sidechain.enabled, s.sidechain.depth, s.sidechain.release_ms,
-         s.sidechain.duck_s1, s.sidechain.duck_s2)
+         s.sidechain.duck_s1, s.sidechain.duck_s2,
+         s.filter1.enabled, s.filter1.mode, s.filter1.cutoff, s.filter1.q,
+         s.filter2.enabled, s.filter2.mode, s.filter2.cutoff, s.filter2.q)
     };
 
     let sel = app.effects_sel;
@@ -729,6 +734,50 @@ fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
                  format!("{:.0}ms", sc_rel),
                  "---".to_string()];
 
+    // Render one filter row (no routing sends)
+    let make_filter_row = |fi: usize, enabled: bool, color: Color, name: &str,
+                           mode: FilterMode, cutoff: f32, q: f32| -> Line {
+        let is_sel = fi == sel;
+        let on_str   = if enabled { "[ON ] " } else { "[OFF] " };
+        let on_style = if enabled { Style::default().fg(Color::Green) }
+                       else       { Style::default().fg(Color::DarkGray) };
+        let name_sty = if is_sel && enabled {
+            Style::default().fg(color).add_modifier(Modifier::BOLD)
+        } else if is_sel {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+        } else if enabled {
+            Style::default().fg(color)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let psty = |pi: usize| -> Style {
+            if is_sel && pi == par && focused {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else if !enabled {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::Gray)
+            }
+        };
+
+        // Log-scale bar for cutoff (80 Hz → 18 kHz)
+        let cut_norm = ((cutoff.ln() - 80f32.ln()) / (18000f32.ln() - 80f32.ln())).clamp(0.0, 1.0);
+        let cut_disp = if cutoff >= 1000.0 { format!("{:.1}kHz", cutoff / 1000.0) }
+                       else                { format!("{:.0}Hz",   cutoff) };
+        let q_norm   = ((q - 0.5) / 9.5).clamp(0.0, 1.0);
+
+        Line::from(vec![
+            Span::styled(on_str,           on_style),
+            Span::styled(name.to_string(), name_sty),
+            Span::raw("  "),
+            Span::styled(format!("Type: [{:^8}]  ", mode.name()), psty(0)),
+            Span::styled(format!("Cutoff: [{}] {:>7}  ", pbar(cut_norm, 1.0), cut_disp), psty(1)),
+            Span::styled(format!("Q:    [{}] {:>4.1}  ", pbar(q_norm, 1.0), q), psty(2)),
+            Span::styled("---              ---              ---  ", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+
     let lines = vec![
         make_row(0, rev_en, Color::Blue,    "REVERB ", &["Room","Damp","Mix "],
                  &[rev_room, rev_damp, rev_mix], &[1.0, 1.0, 1.0], &rev_d,
@@ -742,6 +791,8 @@ fn draw_effects(f: &mut Frame, area: Rect, app: &App) {
         make_row(3, sc_en,  Color::Magenta, "SIDECHN", &["Dpth","Rel ","--- "],
                  &[sc_depth, sc_rel, 0.0], &[1.0, 500.0, 1.0], &sc_d,
                  &[sc_s1 as u8 as f32, sc_s2 as u8 as f32, 0.0]),
+        make_filter_row(4, f1_en, Color::Cyan,  "FILT-S1", f1_mode, f1_cut, f1_q),
+        make_filter_row(5, f2_en, Color::Green, "FILT-S2", f2_mode, f2_cut, f2_q),
     ];
 
     f.render_widget(
@@ -900,11 +951,12 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("[</>] ",  w), Span::raw("Swing ±5%"),
         ]),
         AppMode::Effects => Line::from(vec![
-            Span::styled("[↑↓] ", w), Span::raw("Select effect (row 4=Sidechain)  │  "),
-            Span::styled("[←→] ", w), Span::raw("Param (col 1-3) or send (col 4-6)  │  "),
+            Span::styled("[↑↓] ", w), Span::raw("Select (1-2=Rev/Dly  3=Dist  4=SC  5-6=Filt S1/S2)  │  "),
+            Span::styled("[←→] ", w), Span::raw("Param  │  "),
             Span::styled("[-=] ", w), Span::raw("Adjust  │  "),
             Span::styled("[Enter] ", w), Span::raw("On/Off  │  "),
-            Span::styled("[Space col 4-6] ", w), Span::raw("Route/Duck S1/S2 0↔100%"),
+            Span::styled("[Space] ", w), Span::raw("Route 0↔100%  │  "),
+            Span::styled("Filt params: ", d), Span::raw("Type / Cutoff / Q"),
         ]),
     };
 
