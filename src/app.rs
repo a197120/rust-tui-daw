@@ -2,8 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::drums::DrumKind;
+use crate::effects::FilterMode;
+use crate::save::{DelaySave, DistSave, DrumsSave, FilterSave, ReverbSave, RoutingSave,
+                  SaveFile, SeqSave, SidechainSave, TrackSave};
 use crate::scale::{Scale, ScaleQuantizer};
-use crate::synth::{Synth, note_name};
+use crate::synth::{Synth, WaveType, note_name};
 
 const FALLBACK_RELEASE_THRESHOLD: Duration = Duration::from_millis(600);
 
@@ -47,6 +51,15 @@ pub enum AppMode {
     Effects,
 }
 
+// ── Input mode (file path prompt) ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputMode {
+    None,
+    Save,
+    Load,
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -76,6 +89,10 @@ pub struct App {
 
     // Scale quantizer (input layer — no audio thread involvement)
     pub scale_q: ScaleQuantizer,
+
+    // File path prompt state
+    pub input_mode: InputMode,
+    pub input_buf:  String,
 }
 
 impl App {
@@ -96,6 +113,8 @@ impl App {
             effects_sel:   0,
             effects_param: 0,
             scale_q:       ScaleQuantizer::new(),
+            input_mode:    InputMode::None,
+            input_buf:     String::new(),
         }
     }
 
@@ -763,5 +782,249 @@ impl App {
         if s.filter1.enabled    { ind.push_str("  ▶F1"); }
         if s.filter2.enabled    { ind.push_str("  ▶F2"); }
         ind
+    }
+
+    // ── Persistence ───────────────────────────────────────────────────────
+
+    pub fn save(&mut self, path: &str) {
+        fn wave_idx(w: WaveType) -> u8 {
+            match w { WaveType::Sine=>0, WaveType::Square=>1,
+                      WaveType::Sawtooth=>2, WaveType::Triangle=>3 }
+        }
+        fn filter_mode_idx(m: FilterMode) -> u8 {
+            match m { FilterMode::LowPass=>0, FilterMode::HighPass=>1, FilterMode::BandPass=>2 }
+        }
+
+        // Copy App-level fields before taking the synth lock.
+        let base_octave = self.base_octave;
+        let scale_idx = Scale::ALL.iter()
+            .position(|&sc| sc == self.scale_q.scale)
+            .unwrap_or(0) as u8;
+        let scale_root = self.scale_q.root;
+
+        let sf = {
+            let s = self.synth.lock().unwrap();
+
+            let seq1 = SeqSave {
+                num_steps: s.sequencer.num_steps,
+                steps: s.sequencer.steps.clone(),
+            };
+            let seq2 = SeqSave {
+                num_steps: s.sequencer2.num_steps,
+                steps: s.sequencer2.steps.clone(),
+            };
+
+            let drums = DrumsSave {
+                num_steps: s.drum_machine.num_steps,
+                swing:     s.drum_machine.swing,
+                tracks: s.drum_machine.tracks.iter().map(|t| TrackSave {
+                    kind:   DrumKind::ALL.iter().position(|&k| k == t.kind).unwrap_or(0) as u8,
+                    steps:  t.steps.clone(),
+                    muted:  t.muted,
+                    volume: t.volume,
+                }).collect(),
+            };
+
+            let reverb = ReverbSave {
+                enabled:   s.reverb.enabled,
+                room_size: s.reverb.room_size,
+                damping:   s.reverb.damping,
+                mix:       s.reverb.mix,
+            };
+            let delay = DelaySave {
+                enabled:  s.delay.enabled,
+                time_ms:  s.delay.time_ms,
+                feedback: s.delay.feedback,
+                mix:      s.delay.mix,
+            };
+            let distortion = DistSave {
+                enabled: s.distortion.enabled,
+                drive:   s.distortion.drive,
+                tone:    s.distortion.tone,
+                level:   s.distortion.level,
+            };
+            let sidechain = SidechainSave {
+                enabled:    s.sidechain.enabled,
+                depth:      s.sidechain.depth,
+                release_ms: s.sidechain.release_ms,
+                duck_s1:    s.sidechain.duck_s1,
+                duck_s2:    s.sidechain.duck_s2,
+            };
+            let filter1 = FilterSave {
+                enabled: s.filter1.enabled,
+                mode:    filter_mode_idx(s.filter1.mode),
+                cutoff:  s.filter1.cutoff,
+                q:       s.filter1.q,
+            };
+            let filter2 = FilterSave {
+                enabled: s.filter2.enabled,
+                mode:    filter_mode_idx(s.filter2.mode),
+                cutoff:  s.filter2.cutoff,
+                q:       s.filter2.q,
+            };
+            let routing = RoutingSave {
+                s1_reverb: s.fx_routing.s1_reverb, s1_delay: s.fx_routing.s1_delay, s1_dist: s.fx_routing.s1_dist,
+                s2_reverb: s.fx_routing.s2_reverb, s2_delay: s.fx_routing.s2_delay, s2_dist: s.fx_routing.s2_dist,
+                dr_reverb: s.fx_routing.dr_reverb, dr_delay: s.fx_routing.dr_delay, dr_dist: s.fx_routing.dr_dist,
+            };
+
+            SaveFile {
+                bpm:        s.bpm,
+                base_octave,
+                scale:      scale_idx,
+                scale_root,
+                wave1:      wave_idx(s.wave_type),
+                wave2:      wave_idx(s.wave_type2),
+                volume:     s.volume,
+                volume2:    s.volume2,
+                seq1, seq2, drums,
+                reverb, delay, distortion, sidechain,
+                filter1, filter2, routing,
+            }
+        };
+
+        match serde_json::to_string_pretty(&sf) {
+            Ok(json) => match std::fs::write(path, &json) {
+                Ok(_)  => self.status_msg = format!("Saved → {}", path),
+                Err(e) => self.status_msg = format!("Save error: {}", e),
+            },
+            Err(e) => self.status_msg = format!("Serialize error: {}", e),
+        }
+    }
+
+    pub fn load(&mut self, path: &str) {
+        let json = match std::fs::read_to_string(path) {
+            Ok(j)  => j,
+            Err(e) => { self.status_msg = format!("Load error: {}", e); return; }
+        };
+        let sf: SaveFile = match serde_json::from_str(&json) {
+            Ok(s)  => s,
+            Err(e) => { self.status_msg = format!("Load error: {}", e); return; }
+        };
+
+        self.release_all();
+
+        {
+            let mut s = self.synth.lock().unwrap();
+
+            s.bpm = sf.bpm.clamp(30.0, 300.0);
+
+            s.wave_type = match sf.wave1 {
+                1 => WaveType::Square, 2 => WaveType::Sawtooth,
+                3 => WaveType::Triangle, _ => WaveType::Sine,
+            };
+            s.wave_type2 = match sf.wave2 {
+                1 => WaveType::Square, 2 => WaveType::Sawtooth,
+                3 => WaveType::Triangle, _ => WaveType::Sine,
+            };
+
+            s.volume  = sf.volume.clamp(0.0, 1.0);
+            s.volume2 = sf.volume2.clamp(0.0, 1.0);
+
+            // Sequencer 1
+            let n1 = sf.seq1.num_steps.clamp(1, 32);
+            s.sequencer.num_steps = n1;
+            s.sequencer.steps = sf.seq1.steps;
+            s.sequencer.steps.resize(n1, None);
+
+            // Sequencer 2
+            let n2 = sf.seq2.num_steps.clamp(1, 32);
+            s.sequencer2.num_steps = n2;
+            s.sequencer2.steps = sf.seq2.steps;
+            s.sequencer2.steps.resize(n2, None);
+
+            // Drums
+            let nd = sf.drums.num_steps.clamp(1, 32);
+            s.drum_machine.num_steps = nd;
+            s.drum_machine.swing = sf.drums.swing.clamp(0.0, 0.5);
+            let n_tracks = s.drum_machine.tracks.len().min(sf.drums.tracks.len());
+            for i in 0..n_tracks {
+                let t = &sf.drums.tracks[i];
+                s.drum_machine.tracks[i].steps = t.steps.clone();
+                s.drum_machine.tracks[i].steps.resize(nd, 0);
+                s.drum_machine.tracks[i].muted  = t.muted;
+                s.drum_machine.tracks[i].volume = t.volume.clamp(0.0, 1.0);
+            }
+
+            // Reverb
+            s.reverb.enabled   = sf.reverb.enabled;
+            s.reverb.room_size = sf.reverb.room_size.clamp(0.0, 1.0);
+            s.reverb.damping   = sf.reverb.damping.clamp(0.0, 1.0);
+            s.reverb.mix       = sf.reverb.mix.clamp(0.0, 1.0);
+
+            // Delay
+            s.delay.enabled  = sf.delay.enabled;
+            s.delay.time_ms  = sf.delay.time_ms.clamp(10.0, 1000.0);
+            s.delay.feedback = sf.delay.feedback.clamp(0.0, 0.95);
+            s.delay.mix      = sf.delay.mix.clamp(0.0, 1.0);
+
+            // Distortion
+            s.distortion.enabled = sf.distortion.enabled;
+            s.distortion.drive   = sf.distortion.drive.clamp(1.0, 10.0);
+            s.distortion.tone    = sf.distortion.tone.clamp(0.0, 1.0);
+            s.distortion.level   = sf.distortion.level.clamp(0.0, 1.0);
+
+            // Sidechain
+            s.sidechain.enabled    = sf.sidechain.enabled;
+            s.sidechain.depth      = sf.sidechain.depth.clamp(0.0, 1.0);
+            s.sidechain.release_ms = sf.sidechain.release_ms.clamp(10.0, 500.0);
+            s.sidechain.duck_s1    = sf.sidechain.duck_s1;
+            s.sidechain.duck_s2    = sf.sidechain.duck_s2;
+
+            // Filter 1
+            s.filter1.enabled = sf.filter1.enabled;
+            s.filter1.mode    = match sf.filter1.mode {
+                1 => FilterMode::HighPass, 2 => FilterMode::BandPass, _ => FilterMode::LowPass
+            };
+            s.filter1.cutoff = sf.filter1.cutoff.clamp(80.0, 18000.0);
+            s.filter1.q      = sf.filter1.q.clamp(0.5, 10.0);
+            if s.filter1.enabled { s.filter1.reset_state(); }
+
+            // Filter 2
+            s.filter2.enabled = sf.filter2.enabled;
+            s.filter2.mode    = match sf.filter2.mode {
+                1 => FilterMode::HighPass, 2 => FilterMode::BandPass, _ => FilterMode::LowPass
+            };
+            s.filter2.cutoff = sf.filter2.cutoff.clamp(80.0, 18000.0);
+            s.filter2.q      = sf.filter2.q.clamp(0.5, 10.0);
+            if s.filter2.enabled { s.filter2.reset_state(); }
+
+            // Routing
+            s.fx_routing.s1_reverb = sf.routing.s1_reverb.clamp(0.0, 1.0);
+            s.fx_routing.s1_delay  = sf.routing.s1_delay.clamp(0.0, 1.0);
+            s.fx_routing.s1_dist   = sf.routing.s1_dist.clamp(0.0, 1.0);
+            s.fx_routing.s2_reverb = sf.routing.s2_reverb.clamp(0.0, 1.0);
+            s.fx_routing.s2_delay  = sf.routing.s2_delay.clamp(0.0, 1.0);
+            s.fx_routing.s2_dist   = sf.routing.s2_dist.clamp(0.0, 1.0);
+            s.fx_routing.dr_reverb = sf.routing.dr_reverb.clamp(0.0, 1.0);
+            s.fx_routing.dr_delay  = sf.routing.dr_delay.clamp(0.0, 1.0);
+            s.fx_routing.dr_dist   = sf.routing.dr_dist.clamp(0.0, 1.0);
+        }
+
+        // App-level fields
+        self.base_octave   = sf.base_octave.clamp(0, 8);
+        self.scale_q.scale = Scale::ALL.get(sf.scale as usize).copied().unwrap_or(Scale::Off);
+        self.scale_q.root  = sf.scale_root % 12;
+
+        // Reset cursors
+        self.seq_cursor  = 0;
+        self.seq2_cursor = 0;
+        self.drum_step   = 0;
+
+        self.status_msg = format!("Loaded ← {}", path);
+    }
+
+    /// Commit the current file-path input: call save or load, then reset input state.
+    pub fn commit_input(&mut self) {
+        let path = self.input_buf.trim().to_string();
+        let mode = self.input_mode.clone();
+        self.input_mode = InputMode::None;
+        self.input_buf.clear();
+        if path.is_empty() { return; }
+        match mode {
+            InputMode::Save => self.save(&path),
+            InputMode::Load => self.load(&path),
+            InputMode::None => {}
+        }
     }
 }

@@ -7,7 +7,7 @@ use ratatui::{
 };
 use std::collections::HashSet;
 
-use crate::app::{App, AppMode};
+use crate::app::{App, AppMode, InputMode};
 use crate::drums::DrumKind;
 use crate::effects::FilterMode;
 use crate::synth::note_name;
@@ -913,6 +913,39 @@ fn draw_oscilloscope(f: &mut Frame, area: Rect, app: &App) {
 // ── Unified help panel ────────────────────────────────────────────────────────
 
 fn draw_help(f: &mut Frame, area: Rect, app: &App) {
+    // File path prompt overlay — replaces help when save/load is active.
+    if app.input_mode != InputMode::None {
+        let action = match app.input_mode {
+            InputMode::Save => "Save to file",
+            InputMode::Load => "Load from file",
+            InputMode::None => "",
+        };
+        let w = Style::default().fg(Color::White);
+        let prompt = Line::from(vec![
+            Span::styled(
+                format!("{}: ", action),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                app.input_buf.as_str(),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(Color::White)),
+        ]);
+        let hint = Line::from(vec![
+            Span::styled("[Enter] ", w), Span::raw("Confirm  │  "),
+            Span::styled("[Esc] ",   w), Span::raw("Cancel  │  "),
+            Span::styled("[Bksp] ",  w), Span::raw("Delete char"),
+        ]);
+        f.render_widget(
+            Paragraph::new(vec![prompt, hint])
+                .block(Block::default().title(" File Path ").borders(Borders::ALL))
+                .style(Style::default().fg(Color::DarkGray)),
+            area,
+        );
+        return;
+    }
+
     let w = Style::default().fg(Color::White);
     let d = Style::default().fg(Color::DarkGray);
 
@@ -923,6 +956,8 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         Span::styled("[PgUp/Dn] ",w), Span::raw("BPM  │  "),
         Span::styled("[F6] ",     w), Span::raw("Scale  │  "),
         Span::styled("[F7] ",     w), Span::raw("Root  │  "),
+        Span::styled("[^S] ",     w), Span::raw("Save  │  "),
+        Span::styled("[^L] ",     w), Span::raw("Load  │  "),
         Span::styled("[Esc] ",    w), Span::raw("Quit"),
     ]);
 

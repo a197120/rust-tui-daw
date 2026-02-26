@@ -269,6 +269,33 @@ Help (remaining)   — mode-specific key hints
 Beat groups of 4 are separated by `┆`.
 Playhead = green bg, cursor = yellow bg, playhead+cursor = cyan bg.
 
+## Persistence
+
+Save/load the complete session state to/from a JSON file.
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+S` | Open save prompt (default: `rusttuisynth.json`) |
+| `Ctrl+L` | Open load prompt (default: `rusttuisynth.json`) |
+| `Enter`  | Confirm path and execute |
+| `Esc`    | Cancel |
+| `Bksp`   | Delete last character |
+
+When the prompt is active, the Help panel shows the file-path overlay; all other
+panels remain visible and the audio thread keeps running.
+
+**What is serialized:** BPM, base octave, scale/root, wave1/wave2, volume1/volume2,
+both melodic sequencers (steps + num_steps), drum machine (num_steps, swing, all 8
+tracks with steps/muted/volume), all effect parameters (reverb, delay, distortion,
+sidechain, filter1, filter2), and all 9 FX routing send levels.
+
+**Format:** human-readable pretty-printed JSON via `serde_json`.  The file can be
+hand-edited.  `DrumKind`, `WaveType`, and `FilterMode` are stored as integer indices
+(stable across recompiles; adding new variants at the end is safe).
+
+**Extending:** add new fields to the DTO structs in `src/save.rs` and annotate them
+with `#[serde(default)]` so old saves without those fields still load correctly.
+
 ## Key things to know for future work
 
 - **Adding a new send effect**: implement `AudioEffect`, push onto the relevant `EffectChain`.

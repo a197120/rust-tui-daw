@@ -2,13 +2,14 @@ mod app;
 mod audio;
 mod drums;
 mod effects;
+mod save;
 mod scale;
 mod sequencer;
 mod synth;
 mod ui;
 
 use anyhow::Result;
-use app::{App, AppMode};
+use app::{App, AppMode, InputMode};
 use audio::AudioEngine;
 use crossterm::{
     event::{
@@ -143,11 +144,36 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, enhanced: bool) ->
                         continue;
                     }
 
+                    // ── Input mode: intercept all keys for file-path prompt ──
+                    if app.input_mode != InputMode::None {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.input_mode = InputMode::None;
+                                app.input_buf.clear();
+                                app.status_msg = "Cancelled".to_string();
+                            }
+                            KeyCode::Enter     => app.commit_input(),
+                            KeyCode::Backspace => { app.input_buf.pop(); }
+                            KeyCode::Char(c)   => app.input_buf.push(c),
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     // ── Key press ─────────────────────────────────────────
                     match key.code {
                         // Global quit
                         KeyCode::Esc => break,
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                        // Save / Load
+                        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.input_mode = InputMode::Save;
+                            app.input_buf  = "rusttuisynth.json".to_string();
+                        }
+                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.input_mode = InputMode::Load;
+                            app.input_buf  = "rusttuisynth.json".to_string();
+                        }
 
                         // Global: cycle focus, waveform, drum play, BPM, scale
                         KeyCode::Tab          => app.toggle_mode(),
